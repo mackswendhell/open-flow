@@ -97,6 +97,7 @@ struct Shared {
     settings: Mutex<Settings>,
     groups: Mutex<Vec<Vec<rdev::Key>>>,
     sidecar: Mutex<Option<std::process::Child>>,
+    insert_lock: Mutex<()>,
 }
 
 impl Settings {
@@ -345,6 +346,28 @@ impl Recorder {
     }
 }
 
+/// maior RMS em janelas de 100ms — proxy de "houve fala?"
+fn peak_rms(samples: &[f32], rate: u32) -> f32 {
+    let win = (rate as usize / 10).max(1);
+    samples
+        .chunks(win)
+        .map(|c| (c.iter().map(|s| s * s).sum::<f32>() / c.len() as f32).sqrt())
+        .fold(0.0f32, f32::max)
+}
+
+/// alucinações típicas do Whisper em áudio sem fala
+fn is_hallucination(text: &str, audio_secs: f32) -> bool {
+    if audio_secs >= 2.0 {
+        return false;
+    }
+    let norm: String = text
+        .to_lowercase()
+        .chars()
+        .filter(|c| c.is_alphanumeric() || c.is_whitespace())
+        .collect();
+    matches!(norm.trim(), "e aí" | "eaí" | "obrigado" | "obrigada" | "tchau" | "valeu" | "thank you")
+}
+
 fn wav_bytes(samples: &[f32], rate: u32) -> Vec<u8> {
     let spec = hound::WavSpec {
         channels: 1,
@@ -379,6 +402,9 @@ fn ensure_sidecar(shared: &Shared, s: &Settings) -> Result<(), String> {
     }
     {
         let mut guard = shared.sidecar.lock().unwrap();
+        if sidecar_healthy(s.stt_port) {
+            return Ok(());
+        }
         if let Some(c) = guard.as_mut() {
             let _ = c.kill();
         }
@@ -591,6 +617,7 @@ fn overlay_show(app: &AppHandle) {
             let y = mon.position().y + m.height as i32 - sz.height as i32 - 72;
             let _ = o.set_position(PhysicalPosition::new(x, y));
         }
+        let _ = o.set_always_on_top(true);
         let _ = o.show();
     }
 }
@@ -613,6 +640,7 @@ fn spawn_pipeline(shared: Arc<Shared>, app: AppHandle) -> Sender<Cmd> {
         loop {
             match rx.recv() {
                 Ok(Cmd::Start) => {
+                    overlay_show(&app);
                     let mic = shared.settings.lock().unwrap().mic.clone();
                     let app_lvl = app.clone();
                     let mut last = Instant::now() - Duration::from_secs(1);
@@ -624,8 +652,8 @@ fn spawn_pipeline(shared: Arc<Shared>, app: AppHandle) -> Sender<Cmd> {
                     });
                     if let Err(e) = rec.start(mic.as_deref(), on_level) {
                         eprintln!("[pipeline] gravação falhou: {e}");
+                        overlay_hide(&app);
                     } else {
-                        overlay_show(&app);
                         println!("[pipeline] gravando...");
                     }
                 }
@@ -637,40 +665,54 @@ fn spawn_pipeline(shared: Arc<Shared>, app: AppHandle) -> Sender<Cmd> {
                         println!("[pipeline] áudio curto demais ({secs:.1}s), ignorado");
                         continue;
                     }
-                    let s = shared.settings.lock().unwrap().clone();
-                    let t0 = Instant::now();
-                    let result = run_stt(wav_bytes(&samples, rate), &shared, &s)
-                        .and_then(|raw| {
-                            if raw.is_empty() {
-                                return Err("transcrição vazia".into());
-                            }
-                            let t_stt = t0.elapsed().as_secs_f32();
-                            let final_text = match rewrite(&raw, &s) {
-                                Ok(t) => t,
-                                Err(e) => {
-                                    eprintln!("[pipeline] reescrita falhou ({e}); usando texto bruto");
-                                    raw.clone()
-                                }
-                            };
-                            let final_text = apply_snippets(&final_text, &s.snippets);
-                            let total = t0.elapsed().as_secs_f32();
-                            println!("[pipeline] áudio {secs:.1}s | stt {t_stt:.2}s | total {total:.2}s");
-                            if s.history_enabled {
-                                append_history(&HistoryEntry {
-                                    ts: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs(),
-                                    profile: s.active_profile.clone(),
-                                    raw,
-                                    r#final: final_text.clone(),
-                                    audio_secs: secs,
-                                    stt_secs: t_stt,
-                                    total_secs: total,
-                                });
-                            }
-                            insert_text(&final_text)
-                        });
-                    if let Err(e) = result {
-                        eprintln!("[pipeline] erro: {e}");
+                    let peak = peak_rms(&samples, rate);
+                    if peak < 0.006 {
+                        println!("[pipeline] sem fala detectada (pico rms {peak:.4}), ignorado");
+                        continue;
                     }
+                    // processamento em thread própria: a thread do atalho fica livre e o
+                    // próximo Start é imediato (overlay e gravação sem atraso de fila)
+                    let s = shared.settings.lock().unwrap().clone();
+                    let shared_w = shared.clone();
+                    std::thread::spawn(move || {
+                        let t0 = Instant::now();
+                        let result = run_stt(wav_bytes(&samples, rate), &shared_w, &s)
+                            .and_then(|raw| {
+                                if raw.is_empty() {
+                                    return Err("transcrição vazia".into());
+                                }
+                                if is_hallucination(&raw, secs) {
+                                    return Err(format!("alucinação de silêncio descartada: {raw:?}"));
+                                }
+                                let t_stt = t0.elapsed().as_secs_f32();
+                                let final_text = match rewrite(&raw, &s) {
+                                    Ok(t) => t,
+                                    Err(e) => {
+                                        eprintln!("[pipeline] reescrita falhou ({e}); usando texto bruto");
+                                        raw.clone()
+                                    }
+                                };
+                                let final_text = apply_snippets(&final_text, &s.snippets);
+                                let total = t0.elapsed().as_secs_f32();
+                                println!("[pipeline] áudio {secs:.1}s | stt {t_stt:.2}s | total {total:.2}s");
+                                if s.history_enabled {
+                                    append_history(&HistoryEntry {
+                                        ts: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs(),
+                                        profile: s.active_profile.clone(),
+                                        raw,
+                                        r#final: final_text.clone(),
+                                        audio_secs: secs,
+                                        stt_secs: t_stt,
+                                        total_secs: total,
+                                    });
+                                }
+                                let _serial = shared_w.insert_lock.lock().unwrap();
+                                insert_text(&final_text)
+                            });
+                        if let Err(e) = result {
+                            eprintln!("[pipeline] erro: {e}");
+                        }
+                    });
                 }
                 Err(_) => break,
             }
@@ -873,6 +915,7 @@ pub fn run() {
         groups: Mutex::new(parse_hotkey(&settings.hotkey)),
         sidecar: Mutex::new(if start_local { spawn_sidecar(&settings) } else { None }),
         settings: Mutex::new(settings.clone()),
+        insert_lock: Mutex::new(()),
     });
 
     let shared_exit = shared.clone();
