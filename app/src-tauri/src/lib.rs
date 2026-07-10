@@ -113,6 +113,104 @@ fn settings_path() -> std::path::PathBuf {
     config_dir().join("settings.json")
 }
 
+// --- DPAPI: chaves criptografadas por usuário do Windows no settings.json ---
+const ENC_PREFIX: &str = "enc:";
+
+mod dpapi {
+    use base64::Engine;
+    use windows_sys::Win32::Foundation::LocalFree;
+    use windows_sys::Win32::Security::Cryptography::{
+        CryptProtectData, CryptUnprotectData, CRYPT_INTEGER_BLOB, CRYPTPROTECT_UI_FORBIDDEN,
+    };
+
+    fn b64() -> base64::engine::GeneralPurpose {
+        base64::engine::general_purpose::STANDARD
+    }
+
+    pub fn protect(plain: &str) -> Option<String> {
+        unsafe {
+            let input = CRYPT_INTEGER_BLOB {
+                cbData: plain.len() as u32,
+                pbData: plain.as_ptr() as *mut u8,
+            };
+            let mut out = CRYPT_INTEGER_BLOB { cbData: 0, pbData: std::ptr::null_mut() };
+            if CryptProtectData(
+                &input,
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+                CRYPTPROTECT_UI_FORBIDDEN,
+                &mut out,
+            ) == 0
+            {
+                return None;
+            }
+            let bytes = std::slice::from_raw_parts(out.pbData, out.cbData as usize).to_vec();
+            LocalFree(out.pbData as _);
+            Some(b64().encode(bytes))
+        }
+    }
+
+    pub fn unprotect(encoded: &str) -> Option<String> {
+        let bytes = b64().decode(encoded).ok()?;
+        unsafe {
+            let input = CRYPT_INTEGER_BLOB {
+                cbData: bytes.len() as u32,
+                pbData: bytes.as_ptr() as *mut u8,
+            };
+            let mut out = CRYPT_INTEGER_BLOB { cbData: 0, pbData: std::ptr::null_mut() };
+            if CryptUnprotectData(
+                &input,
+                std::ptr::null_mut(),
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+                CRYPTPROTECT_UI_FORBIDDEN,
+                &mut out,
+            ) == 0
+            {
+                return None;
+            }
+            let plain = std::slice::from_raw_parts(out.pbData, out.cbData as usize).to_vec();
+            LocalFree(out.pbData as _);
+            String::from_utf8(plain).ok()
+        }
+    }
+}
+
+fn decrypt_key(v: &Option<String>) -> Option<String> {
+    v.as_ref()
+        .map(|s| match s.strip_prefix(ENC_PREFIX) {
+            Some(b64) => dpapi::unprotect(b64).unwrap_or_default(),
+            None => s.clone(),
+        })
+        .filter(|s| !s.is_empty())
+}
+
+fn encrypt_key(v: &Option<String>) -> Option<String> {
+    v.as_ref().filter(|s| !s.is_empty()).map(|s| {
+        if s.starts_with(ENC_PREFIX) {
+            s.clone()
+        } else {
+            dpapi::protect(s)
+                .map(|b| format!("{ENC_PREFIX}{b}"))
+                .unwrap_or_else(|| s.clone())
+        }
+    })
+}
+
+/// grava no disco com as chaves criptografadas (em memória ficam em texto)
+fn persist_settings(s: &Settings) -> Result<(), String> {
+    let mut disk = s.clone();
+    disk.gemini_api_key = encrypt_key(&disk.gemini_api_key);
+    disk.groq_api_key = encrypt_key(&disk.groq_api_key);
+    let path = settings_path();
+    std::fs::create_dir_all(path.parent().unwrap()).map_err(|e| e.to_string())?;
+    std::fs::write(&path, serde_json::to_string_pretty(&disk).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())
+}
+
 fn history_path() -> std::path::PathBuf {
     config_dir().join("history.jsonl")
 }
@@ -127,6 +225,8 @@ fn load_settings() -> (Settings, bool) {
                 if s.profiles.is_empty() {
                     s.profiles = default_profiles();
                 }
+                s.gemini_api_key = decrypt_key(&s.gemini_api_key);
+                s.groq_api_key = decrypt_key(&s.groq_api_key);
                 return (s, false);
             }
             Err(e) => {
@@ -671,10 +771,7 @@ fn set_autostart(app: AppHandle, enabled: bool) -> Result<(), String> {
 
 #[tauri::command]
 fn save_settings(state: tauri::State<Arc<Shared>>, settings: Settings) -> Result<(), String> {
-    let path = settings_path();
-    std::fs::create_dir_all(path.parent().unwrap()).map_err(|e| e.to_string())?;
-    std::fs::write(&path, serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?)
-        .map_err(|e| e.to_string())?;
+    persist_settings(&settings)?;
     *state.groups.lock().unwrap() = parse_hotkey(&settings.hotkey);
     let warm_local = settings.stt_provider == "local";
     *state.settings.lock().unwrap() = settings;
@@ -768,6 +865,8 @@ fn get_diagnostics(state: tauri::State<Arc<Shared>>) -> Diagnostics {
 
 pub fn run() {
     let (settings, first_run) = load_settings();
+    // migra chaves em texto plano para DPAPI na primeira oportunidade
+    let _ = persist_settings(&settings);
     // com Groq configurado como provedor, a GPU fica livre: o local só aquece sob demanda
     let start_local = settings.stt_provider != "groq" || !settings.groq_ready();
     let shared = Arc::new(Shared {
@@ -779,6 +878,12 @@ pub fn run() {
     let shared_exit = shared.clone();
     let shared_setup = shared.clone();
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.show();
+                let _ = w.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,

@@ -154,8 +154,7 @@ Bugs memoráveis (e suas lições, gravadas como proteções no código):
 
 ## Pendências mapeadas
 
-- Prévia editável antes de inserir (modo revisão)
-- Providers de reescrita alternativos: Claude CLI (assinatura), Codex CLI (ChatGPT Plus)
-- Instalador NSIS + auto-update; empacotar o sidecar sem depender do Python local
-- Chave Gemini/Groq via DPAPI em vez de texto no settings.json
-- Regras por aplicativo, comandos de voz, single-instance
+- Assinatura de código (eliminar o aviso do SmartScreen) — quando a distribuição justificar
+
+Já entregues desde a v0.1.0: instalador NSIS, autostart com toggle, idiomas de fala/saída com
+tradução, dicionário com campos separados, single-instance, chaves criptografadas via DPAPI.
