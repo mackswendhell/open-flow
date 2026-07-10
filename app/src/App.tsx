@@ -179,8 +179,10 @@ function SecretInput({
 
 function GeneralTab({ s, patch }: TabProps) {
   const [mics, setMics] = useState<string[]>([]);
+  const [autostart, setAutostart] = useState(false);
   useEffect(() => {
     invoke<string[]>("list_mics").then(setMics);
+    invoke<boolean>("get_autostart").then(setAutostart);
   }, []);
 
   return (
@@ -215,6 +217,25 @@ function GeneralTab({ s, patch }: TabProps) {
             <span className="slider" />
           </span>
           {s.theme === "light" ? "Claro" : "Escuro"}
+        </label>
+      </div>
+
+      <div className="field">
+        <span>Iniciar com o Windows</span>
+        <label className="switch-row">
+          <span className="switch">
+            <input
+              type="checkbox"
+              checked={autostart}
+              onChange={async (e) => {
+                const enabled = e.target.checked;
+                setAutostart(enabled);
+                await invoke("set_autostart", { enabled });
+              }}
+            />
+            <span className="slider" />
+          </span>
+          {autostart ? "Ativado" : "Desativado"}
         </label>
       </div>
 

@@ -113,7 +113,8 @@ fn history_path() -> std::path::PathBuf {
     config_dir().join("history.jsonl")
 }
 
-fn load_settings() -> Settings {
+/// retorna (settings, primeira_execucao)
+fn load_settings() -> (Settings, bool) {
     let path = settings_path();
     if let Ok(txt) = std::fs::read_to_string(&path) {
         // tolera BOM que editores/PowerShell inserem
@@ -122,7 +123,7 @@ fn load_settings() -> Settings {
                 if s.profiles.is_empty() {
                     s.profiles = default_profiles();
                 }
-                return s;
+                return (s, false);
             }
             Err(e) => {
                 // nunca descartar o arquivo do usuário em silêncio
@@ -134,7 +135,7 @@ fn load_settings() -> Settings {
     let s = Settings::default();
     let _ = std::fs::create_dir_all(path.parent().unwrap());
     let _ = std::fs::write(&path, serde_json::to_string_pretty(&s).unwrap());
-    s
+    (s, true)
 }
 
 fn key_from_name(name: &str) -> rdev::Key {
@@ -634,6 +635,23 @@ fn get_settings(state: tauri::State<Arc<Shared>>) -> Settings {
 }
 
 #[tauri::command]
+fn get_autostart(app: AppHandle) -> bool {
+    use tauri_plugin_autostart::ManagerExt;
+    app.autolaunch().is_enabled().unwrap_or(false)
+}
+
+#[tauri::command]
+fn set_autostart(app: AppHandle, enabled: bool) -> Result<(), String> {
+    use tauri_plugin_autostart::ManagerExt;
+    let m = app.autolaunch();
+    if enabled {
+        m.enable().map_err(|e| e.to_string())
+    } else {
+        m.disable().map_err(|e| e.to_string())
+    }
+}
+
+#[tauri::command]
 fn save_settings(state: tauri::State<Arc<Shared>>, settings: Settings) -> Result<(), String> {
     let path = settings_path();
     std::fs::create_dir_all(path.parent().unwrap()).map_err(|e| e.to_string())?;
@@ -731,7 +749,7 @@ fn get_diagnostics(state: tauri::State<Arc<Shared>>) -> Diagnostics {
 }
 
 pub fn run() {
-    let settings = load_settings();
+    let (settings, first_run) = load_settings();
     // com Groq configurado como provedor, a GPU fica livre: o local só aquece sob demanda
     let start_local = settings.stt_provider != "groq" || !settings.groq_ready();
     let shared = Arc::new(Shared {
@@ -744,6 +762,10 @@ pub fn run() {
     let shared_setup = shared.clone();
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .manage(shared)
         .invoke_handler(tauri::generate_handler![
             get_settings,
@@ -751,9 +773,15 @@ pub fn run() {
             list_mics,
             get_history,
             clear_history,
-            get_diagnostics
+            get_diagnostics,
+            get_autostart,
+            set_autostart
         ])
         .setup(move |app| {
+            if first_run {
+                use tauri_plugin_autostart::ManagerExt;
+                let _ = app.autolaunch().enable();
+            }
             let tx = spawn_pipeline(shared_setup.clone(), app.handle().clone());
             spawn_hotkey_listener(shared_setup.clone(), tx);
 

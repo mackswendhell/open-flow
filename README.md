@@ -50,7 +50,8 @@ Notas:
 - **Privacidade**: o áudio vai para a Groq e o texto para o Google (free tiers podem usar dados
   para treino). Para transcrição 100% local/offline, veja "Modo local" abaixo — exige GPU NVIDIA
   e Python.
-- Para iniciar com o Windows: crie um atalho do app na pasta `shell:startup`.
+- O app se registra para **iniciar com o Windows** automaticamente na primeira execução
+  (dá para desligar em Configurações → Geral → "Iniciar com o Windows").
 - Sem a chave Gemini o texto sai bruto (sem limpeza); sem a chave Groq (e sem modo local) o
   ditado não funciona.
 
