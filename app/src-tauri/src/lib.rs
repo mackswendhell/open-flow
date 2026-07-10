@@ -609,6 +609,10 @@ fn spawn_hotkey_listener(shared: Arc<Shared>, tx: Sender<Cmd>) {
 fn spawn_sidecar(s: &Settings) -> Option<std::process::Child> {
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    if !std::path::Path::new(&s.python).exists() || !std::path::Path::new(&s.sidecar).exists() {
+        println!("[sidecar] transcrição local não configurada — operando só em nuvem (Groq)");
+        return None;
+    }
     match std::process::Command::new(&s.python)
         .arg(&s.sidecar)
         .env("OPENFLOW_STT_PORT", s.stt_port.to_string())
