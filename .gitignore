@@ -1,0 +1,13 @@
+# builds e dependências
+app/src-tauri/target/
+app/node_modules/
+app/dist/
+.venv/
+
+# protótipos e artefatos de teste locais
+spike/
+
+# nunca versionar segredos ou dados do usuário
+# (settings.json com chaves vive em %APPDATA%\OpenFlow, fora do repo)
+*.log
+*.bak
