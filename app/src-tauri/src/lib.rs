@@ -38,6 +38,8 @@ struct Settings {
     stt_provider: String,
     groq_api_key: Option<String>,
     groq_model: String,
+    speech_lang: String,
+    output_lang: String,
     gemini_model: String,
     gemini_api_key: Option<String>,
     wave_style: String,
@@ -72,6 +74,8 @@ impl Default for Settings {
             stt_provider: "groq".into(),
             groq_api_key: None,
             groq_model: "whisper-large-v3-turbo".into(),
+            speech_lang: "pt".into(),
+            output_lang: "same".into(),
             gemini_model: "gemini-3.1-flash-lite".into(),
             gemini_api_key: None,
             wave_style: "tech".into(),
@@ -300,11 +304,13 @@ fn transcribe_groq(wav: Vec<u8>, s: &Settings) -> Result<String, String> {
         .file_name("audio.wav")
         .mime_str("audio/wav")
         .map_err(|e| e.to_string())?;
-    let form = reqwest::blocking::multipart::Form::new()
+    let mut form = reqwest::blocking::multipart::Form::new()
         .part("file", part)
         .text("model", s.groq_model.clone())
-        .text("language", "pt")
         .text("response_format", "json");
+    if s.speech_lang != "auto" {
+        form = form.text("language", s.speech_lang.clone());
+    }
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(30))
         .build()
@@ -333,7 +339,7 @@ fn run_stt(wav: Vec<u8>, shared: &Shared, s: &Settings) -> Result<String, String
         }
     }
     match ensure_sidecar(shared, s) {
-        Ok(()) => transcribe(wav, s.stt_port),
+        Ok(()) => transcribe(wav, s.stt_port, &s.speech_lang),
         Err(e) if s.stt_provider == "local" && s.groq_ready() => {
             eprintln!("[stt] local indisponível ({e}); caindo para o Groq");
             transcribe_groq(wav, s)
@@ -342,13 +348,13 @@ fn run_stt(wav: Vec<u8>, shared: &Shared, s: &Settings) -> Result<String, String
     }
 }
 
-fn transcribe(wav: Vec<u8>, port: u16) -> Result<String, String> {
+fn transcribe(wav: Vec<u8>, port: u16, lang: &str) -> Result<String, String> {
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(60))
         .build()
         .map_err(|e| e.to_string())?;
     let v: serde_json::Value = client
-        .post(format!("http://127.0.0.1:{port}/stt"))
+        .post(format!("http://127.0.0.1:{port}/stt?lang={lang}"))
         .body(wav)
         .send()
         .map_err(|e| format!("sidecar STT: {e}"))?
@@ -365,10 +371,22 @@ fn build_prompt(s: &Settings) -> String {
         .map(|p| p.style.clone())
         .unwrap_or_else(|| "texto natural corrigido, mantendo o tom do falante.".into());
     let mut p = RULES.to_string();
-    if !s.dictionary.is_empty() {
-        p.push_str(&format!("4. Grafias obrigatórias quando essas palavras aparecerem: {}.\n", s.dictionary.join(", ")));
+    let dict: Vec<&str> = s.dictionary.iter().map(|t| t.trim()).filter(|t| !t.is_empty()).collect();
+    if !dict.is_empty() {
+        p.push_str(&format!("4. Grafias obrigatórias quando essas palavras aparecerem: {}.\n", dict.join(", ")));
     }
     p.push_str("Responda SOMENTE com o texto final, sem comentários.\n");
+    if s.output_lang != "same" && s.output_lang != s.speech_lang {
+        let idioma = match s.output_lang.as_str() {
+            "pt" => "português do Brasil",
+            "en" => "inglês",
+            "es" => "espanhol",
+            other => other,
+        };
+        p.push_str(&format!(
+            "Escreva o texto final em {idioma}, mantendo URLs, e-mails e nomes próprios intactos.\n"
+        ));
+    }
     p.push_str(&format!("Estilo: {style}\n\nTranscrição:\n"));
     p
 }

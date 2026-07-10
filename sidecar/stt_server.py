@@ -77,9 +77,13 @@ class Handler(BaseHTTPRequestHandler):
         self._reply(200, json.dumps({"status": "ok", "device": DEVICE}).encode())
 
     def do_POST(self):
+        from urllib.parse import parse_qs, urlparse
+
         wav = self.rfile.read(int(self.headers.get("Content-Length", "0")))
+        lang = parse_qs(urlparse(self.path).query).get("lang", ["pt"])[0]
+        kwargs = {} if lang == "auto" else {"language": lang}
         t = time.perf_counter()
-        segments, info = MODEL.transcribe(io.BytesIO(wav), language="pt", beam_size=1, vad_filter=True)
+        segments, info = MODEL.transcribe(io.BytesIO(wav), beam_size=1, vad_filter=True, **kwargs)
         text = " ".join(s.text.strip() for s in segments)
         dt = time.perf_counter() - t
         print(f"[stt] {info.duration:.1f}s de áudio em {dt:.2f}s: {text[:80]}", flush=True)

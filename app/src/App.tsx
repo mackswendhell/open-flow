@@ -20,6 +20,8 @@ export interface Settings {
   stt_provider: string;
   groq_api_key: string | null;
   groq_model: string;
+  speech_lang: string;
+  output_lang: string;
   gemini_model: string;
   gemini_api_key: string | null;
   wave_style: string;
@@ -316,11 +318,39 @@ function GeneralTab({ s, patch }: TabProps) {
         <span>Modelo de transcrição (Groq)</span>
         <input value={s.groq_model} onChange={(e) => patch({ groq_model: e.target.value })} />
       </label>
+      <label className="field">
+        <span>Idioma da fala</span>
+        <select
+          value={s.speech_lang}
+          onChange={(e) => patch({ speech_lang: e.target.value })}
+        >
+          <option value="pt">Português (Brasil)</option>
+          <option value="en">English</option>
+          <option value="es">Español</option>
+          <option value="auto">Detectar automaticamente</option>
+        </select>
+        <small>Idioma fixo transcreve melhor que a detecção automática em frases curtas.</small>
+      </label>
 
       <h2>Reescrita — texto → texto final</h2>
       <p className="hint">
         Quem limpa a narração (hesitações, autocorreções) e aplica o perfil de escrita ativo.
       </p>
+      <label className="field">
+        <span>Idioma de saída</span>
+        <select
+          value={s.output_lang}
+          onChange={(e) => patch({ output_lang: e.target.value })}
+        >
+          <option value="same">Mesmo da fala</option>
+          <option value="pt">Português (Brasil)</option>
+          <option value="en">English</option>
+          <option value="es">Español</option>
+        </select>
+        <small>
+          Diferente do idioma da fala = o texto final sai traduzido (requer a chave Gemini).
+        </small>
+      </label>
       <label className="field">
         <span>Modelo de reescrita (Gemini)</span>
         <input
@@ -403,20 +433,34 @@ function ProfilesTab({ s, patch }: TabProps) {
 }
 
 function DictTab({ s, patch }: TabProps) {
+  const update = (i: number, v: string) =>
+    patch({ dictionary: s.dictionary.map((d, j) => (j === i ? v : d)) });
+
   return (
     <section>
       <h1>Dicionário pessoal</h1>
       <p className="hint">
-        Nomes próprios e termos que devem ser grafados exatamente assim (um por linha). Ex.:
-        Macks Wendhell, Remotion, Wispr Flow.
+        Nomes próprios e termos que devem ser grafados exatamente assim — com espaços, acentos e
+        maiúsculas. Ex.: Macks Wendhell, Wispr Flow.
       </p>
-      <textarea
-        rows={14}
-        value={s.dictionary.join("\n")}
-        onChange={(e) =>
-          patch({ dictionary: e.target.value.split("\n").map((l) => l.trim()).filter(Boolean) })
-        }
-      />
+      {s.dictionary.map((term, i) => (
+        <div key={i} className="snippet-row">
+          <input
+            placeholder="termo ou nome próprio"
+            value={term}
+            onChange={(e) => update(i, e.target.value)}
+          />
+          <button
+            className="danger"
+            onClick={() => patch({ dictionary: s.dictionary.filter((_, j) => j !== i) })}
+          >
+            ×
+          </button>
+        </div>
+      ))}
+      <button onClick={() => patch({ dictionary: [...s.dictionary, ""] })}>
+        + Adicionar termo
+      </button>
     </section>
   );
 }
