@@ -1,14 +1,24 @@
-# Open Flow
+<p align="center"><img src="docs/logo.png" width="128" alt="Open Flow"></p>
+<h1 align="center">Open Flow</h1>
+<p align="center"><b>Segure uma tecla, fale, solte — o texto sai pronto onde o cursor estiver.</b><br>
+Ditado inteligente para Windows: transcrição + limpeza + formatação por perfil, em ~2s e R$ 0/mês.</p>
+<p align="center">
+  <a href="../../releases"><img src="https://img.shields.io/github/v/release/mackswendhell/open-flow" alt="release"></a>
+  <img src="https://img.shields.io/badge/plataforma-Windows%2011-blue" alt="Windows 11">
+</p>
 
-App Windows de ditado inteligente, inspirado no Wispr Flow. Segure **Ctrl+Win**, fale, solte —
-o texto sai transcrito, limpo (sem hesitações e autocorreções da fala) e formatado no estilo do
-perfil ativo, inserido direto no campo onde o cursor estiver. Latência medida: **~2s** do soltar
-a tecla ao texto pronto. Custo de operação: **R$ 0/mês**.
+Segure **Ctrl+Win**, fale, solte. O que você disse é transcrito, limpo (sem hesitações e
+autocorreções da fala) e formatado no estilo do perfil ativo — e-mail, jurídico, WhatsApp,
+roteiro — direto no campo onde o cursor estiver.
 
 Exemplo real do comportamento: ditar *"Certifico que fui até o endereço, é, não, melhor,
 dirigi-me ao endereço indicado no mandado... deixa eu corrigir, o imóvel pertence ao pai da
 parte..."* produz *"Certifico que me dirigi ao endereço indicado no mandado. No local, fui
 informado de que o imóvel pertence ao genitor da parte..."*.
+
+<p align="center"><img src="docs/img/ui.png" width="640" alt="Janela de configurações"></p>
+<p align="center"><img src="docs/img/overlay.png" width="400" alt="Overlay de ondas durante o ditado"><br>
+<i>Enquanto você fala, uma onda discreta aparece na parte inferior da tela.</i></p>
 
 ## Instalação (usuários)
 
@@ -158,3 +168,11 @@ Bugs memoráveis (e suas lições, gravadas como proteções no código):
 
 Já entregues desde a v0.1.0: instalador NSIS, autostart com toggle, idiomas de fala/saída com
 tradução, dicionário com campos separados, single-instance, chaves criptografadas via DPAPI.
+
+## Apoie
+
+O Open Flow é gratuito e open source. Quem faz é o [Macks Wendhell](https://www.youtube.com/@mackswendhell),
+do canal **Inteligência Aplicada** (conteúdos práticos sobre IA, trabalho e produtividade).
+Se o app facilita seu trabalho, você pode apoiar o desenvolvimento com uma contribuição
+voluntária via Pix — a chave e o QR code estão na aba **Apoie**, dentro do próprio app.
+O apoio é totalmente opcional: o Open Flow continuará gratuito e aberto para todos.

@@ -406,6 +406,23 @@ details summary {
   margin-bottom: 0.3rem;
 }
 
+.apoie img {
+  display: block;
+  max-width: 100%;
+  border-radius: 8px;
+  margin: 0.5rem 0;
+}
+
+.apoie .apoie-qr {
+  max-width: 220px;
+  margin: 0.5rem auto;
+}
+
+.apoie p {
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
 .stat {
   display: flex;
   flex-direction: column;

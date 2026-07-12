@@ -24,6 +24,9 @@ export default function Overlay() {
     const unlisten = listen<number>("level", (e) => {
       level.current = e.payload;
     });
+    const unShow = listen<string>("overlay_show", (e) => {
+      style.current = e.payload;
+    });
 
     const canvas = canvasRef.current!;
     const dpr = window.devicePixelRatio || 1;
@@ -111,6 +114,7 @@ export default function Overlay() {
     return () => {
       cancelAnimationFrame(raf);
       unlisten.then((f) => f());
+      unShow.then((f) => f());
     };
   }, []);
 

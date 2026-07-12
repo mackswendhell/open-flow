@@ -7,7 +7,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use serde::{Deserialize, Serialize};
-use tauri::menu::{Menu, MenuItem};
+use tauri::menu::{CheckMenuItem, Menu, MenuItem, Submenu};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Emitter, Manager, PhysicalPosition};
 
@@ -95,7 +95,7 @@ impl Default for Settings {
 
 struct Shared {
     settings: Mutex<Settings>,
-    groups: Mutex<Vec<Vec<rdev::Key>>>,
+    groups: Mutex<Vec<Vec<u32>>>,
     sidecar: Mutex<Option<std::process::Child>>,
     insert_lock: Mutex<()>,
 }
@@ -243,26 +243,24 @@ fn load_settings() -> (Settings, bool) {
     (s, true)
 }
 
-fn key_from_name(name: &str) -> rdev::Key {
-    use rdev::Key::*;
+fn vk_from_name(name: &str) -> u32 {
     match name {
-        "F1" => F1, "F2" => F2, "F3" => F3, "F4" => F4, "F5" => F5, "F6" => F6,
-        "F7" => F7, "F8" => F8, "F10" => F10, "F11" => F11, "F12" => F12,
-        "SCROLLLOCK" => ScrollLock, "PAUSE" => Pause, "CAPSLOCK" => CapsLock,
-        "INSERT" => Insert, "HOME" => Home, "END" => End,
-        _ => F9,
+        "F1" => 0x70, "F2" => 0x71, "F3" => 0x72, "F4" => 0x73, "F5" => 0x74, "F6" => 0x75,
+        "F7" => 0x76, "F8" => 0x77, "F10" => 0x79, "F11" => 0x7A, "F12" => 0x7B,
+        "SCROLLLOCK" => 0x91, "PAUSE" => 0x13, "CAPSLOCK" => 0x14,
+        "INSERT" => 0x2D, "HOME" => 0x24, "END" => 0x23,
+        _ => 0x78, // F9
     }
 }
 
-fn parse_hotkey(s: &str) -> Vec<Vec<rdev::Key>> {
-    use rdev::Key::*;
+fn parse_hotkey(s: &str) -> Vec<Vec<u32>> {
     s.split('+')
         .map(|t| match t.trim().to_uppercase().as_str() {
-            "CTRL" | "CONTROL" => vec![ControlLeft, ControlRight],
-            "WIN" | "META" | "SUPER" => vec![MetaLeft, MetaRight],
-            "ALT" => vec![Alt, AltGr],
-            "SHIFT" => vec![ShiftLeft, ShiftRight],
-            other => vec![key_from_name(other)],
+            "CTRL" | "CONTROL" => vec![0xA2, 0xA3], // L/RCONTROL
+            "WIN" | "META" | "SUPER" => vec![0x5B, 0x5C], // L/RWIN
+            "ALT" => vec![0xA4, 0xA5],   // LMENU/RMENU (AltGr = RMENU)
+            "SHIFT" => vec![0xA0, 0xA1], // L/RSHIFT
+            other => vec![vk_from_name(other)],
         })
         .collect()
 }
@@ -576,13 +574,24 @@ fn apply_snippets(text: &str, snippets: &[Snippet]) -> String {
 
 fn insert_text(text: &str) -> Result<(), String> {
     use enigo::{Direction, Enigo, Key, Keyboard};
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
     let mut clip = arboard::Clipboard::new().map_err(|e| e.to_string())?;
     let backup = clip.get_text().ok();
     clip.set_text(text).map_err(|e| e.to_string())?;
     std::thread::sleep(Duration::from_millis(60));
+    // espera Shift/Ctrl/Alt/Win físicos soltarem: modificador físico + V sintético
+    // formaria combos do sistema (Ctrl+Shift troca layout de teclado, Win+V etc.)
+    let deadline = Instant::now() + Duration::from_secs(1);
+    while Instant::now() < deadline
+        && [0x10i32, 0x11, 0x12, 0x5B, 0x5C]
+            .iter()
+            .any(|&vk| unsafe { GetAsyncKeyState(vk) } as u16 & 0x8000 != 0)
+    {
+        std::thread::sleep(Duration::from_millis(15));
+    }
     let mut enigo = Enigo::new(&enigo::Settings::default()).map_err(|e| e.to_string())?;
     enigo.key(Key::Control, Direction::Press).map_err(|e| e.to_string())?;
-    enigo.key(Key::Unicode('v'), Direction::Click).map_err(|e| e.to_string())?;
+    enigo.key(Key::Other(0x56), Direction::Click).map_err(|e| e.to_string())?; // VK_V cru, independe de layout
     enigo.key(Key::Control, Direction::Release).map_err(|e| e.to_string())?;
     std::thread::sleep(Duration::from_millis(300));
     if let Some(b) = backup {
@@ -609,16 +618,40 @@ fn append_history(entry: &HistoryEntry) {
     }
 }
 
+fn overlay_log(msg: &str) {
+    let ts = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    let _ = std::fs::create_dir_all(config_dir());
+    if let Ok(mut f) =
+        std::fs::OpenOptions::new().create(true).append(true).open(config_dir().join("overlay.log"))
+    {
+        let _ = writeln!(f, "{ts} {msg}");
+    }
+}
+
 fn overlay_show(app: &AppHandle) {
+    let style = app.state::<Arc<Shared>>().settings.lock().unwrap().wave_style.clone();
     if let Some(o) = app.get_webview_window("overlay") {
-        if let (Ok(Some(mon)), Ok(sz)) = (o.primary_monitor(), o.outer_size()) {
+        // monitor onde está o cursor (foco de digitação), não o primário
+        let mon = o
+            .cursor_position()
+            .ok()
+            .and_then(|p| o.monitor_from_point(p.x, p.y).ok().flatten())
+            .or_else(|| o.primary_monitor().ok().flatten());
+        if let (Some(mon), Ok(sz)) = (mon, o.outer_size()) {
             let m = mon.size();
             let x = mon.position().x + (m.width as i32 - sz.width as i32) / 2;
             let y = mon.position().y + m.height as i32 - sz.height as i32 - 72;
-            let _ = o.set_position(PhysicalPosition::new(x, y));
+            if let Err(e) = o.set_position(PhysicalPosition::new(x, y)) {
+                overlay_log(&format!("set_position falhou: {e}"));
+            }
         }
         let _ = o.set_always_on_top(true);
-        let _ = o.show();
+        if let Err(e) = o.show() {
+            overlay_log(&format!("show falhou: {e}"));
+        }
+        let _ = app.emit_to("overlay", "overlay_show", style);
+    } else {
+        overlay_log("janela overlay inexistente");
     }
 }
 
@@ -721,49 +754,95 @@ fn spawn_pipeline(shared: Arc<Shared>, app: AppHandle) -> Sender<Cmd> {
     tx
 }
 
-fn spawn_hotkey_listener(shared: Arc<Shared>, tx: Sender<Cmd>) {
-    std::thread::spawn(move || {
-        let mut pressed: HashSet<rdev::Key> = HashSet::new();
-        let mut active = false;
-        let mut recording = false;
-        println!("[hotkey] instalando hook global...");
-        let result = rdev::listen(move |event| {
-            let (key, down) = match event.event_type {
-                rdev::EventType::KeyPress(k) => (k, true),
-                rdev::EventType::KeyRelease(k) => (k, false),
-                _ => return,
-            };
-            if down {
-                pressed.insert(key);
-            } else {
-                pressed.remove(&key);
-            }
-            let groups = shared.groups.lock().unwrap();
-            let satisfied =
-                !groups.is_empty() && groups.iter().all(|g| g.iter().any(|k| pressed.contains(k)));
-            drop(groups);
-            let mode = shared.settings.lock().unwrap().mode.clone();
-            if satisfied && !active {
-                active = true;
-                println!("[hotkey] atalho ativado");
-                if mode == "toggle" {
-                    recording = !recording;
-                    let _ = tx.send(if recording { Cmd::Start } else { Cmd::Stop });
-                } else {
-                    recording = true;
-                    let _ = tx.send(Cmd::Start);
-                }
-            } else if !satisfied && active {
-                active = false;
-                if mode != "toggle" && recording {
-                    recording = false;
-                    let _ = tx.send(Cmd::Stop);
-                }
-            }
-        });
-        if let Err(e) = result {
-            eprintln!("[hotkey] hook falhou: {e:?}");
+// Hook WH_KEYBOARD_LL próprio: só rastreia keydown/keyup de VKs. O rdev chamava
+// ToUnicode dentro do hook, o que consome dead keys (~/^) do sistema inteiro.
+struct HookState {
+    shared: Arc<Shared>,
+    tx: Sender<Cmd>,
+    pressed: HashSet<u32>,
+    active: bool,
+    recording: bool,
+}
+
+thread_local! {
+    static HOOK_STATE: std::cell::RefCell<Option<HookState>> = const { std::cell::RefCell::new(None) };
+}
+
+fn handle_key(st: &mut HookState, vk: u32, down: bool) {
+    if down {
+        st.pressed.insert(vk);
+    } else {
+        st.pressed.remove(&vk);
+    }
+    let groups = st.shared.groups.lock().unwrap();
+    let satisfied =
+        !groups.is_empty() && groups.iter().all(|g| g.iter().any(|k| st.pressed.contains(k)));
+    drop(groups);
+    let mode = st.shared.settings.lock().unwrap().mode.clone();
+    if satisfied && !st.active {
+        st.active = true;
+        println!("[hotkey] atalho ativado");
+        if mode == "toggle" {
+            st.recording = !st.recording;
+            let _ = st.tx.send(if st.recording { Cmd::Start } else { Cmd::Stop });
+        } else {
+            st.recording = true;
+            let _ = st.tx.send(Cmd::Start);
         }
+    } else if !satisfied && st.active {
+        st.active = false;
+        if mode != "toggle" && st.recording {
+            st.recording = false;
+            let _ = st.tx.send(Cmd::Stop);
+        }
+    }
+}
+
+unsafe extern "system" fn keyboard_hook_proc(code: i32, wparam: usize, lparam: isize) -> isize {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        CallNextHookEx, KBDLLHOOKSTRUCT, LLKHF_INJECTED, WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN,
+        WM_SYSKEYUP,
+    };
+    if code >= 0 {
+        let kb = &*(lparam as *const KBDLLHOOKSTRUCT);
+        // ignora teclas injetadas (o próprio Ctrl+V sintético não polui o estado)
+        if kb.flags & LLKHF_INJECTED == 0 {
+            let msg = wparam as u32;
+            let down = msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN;
+            if down || msg == WM_KEYUP || msg == WM_SYSKEYUP {
+                HOOK_STATE.with(|s| {
+                    if let Some(st) = s.borrow_mut().as_mut() {
+                        handle_key(st, kb.vkCode, down);
+                    }
+                });
+            }
+        }
+    }
+    CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam)
+}
+
+fn spawn_hotkey_listener(shared: Arc<Shared>, tx: Sender<Cmd>) {
+    std::thread::spawn(move || unsafe {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            GetMessageW, SetWindowsHookExW, MSG, WH_KEYBOARD_LL,
+        };
+        HOOK_STATE.with(|s| {
+            *s.borrow_mut() = Some(HookState {
+                shared,
+                tx,
+                pressed: HashSet::new(),
+                active: false,
+                recording: false,
+            });
+        });
+        println!("[hotkey] instalando hook global...");
+        let hook = SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_hook_proc), std::ptr::null_mut(), 0);
+        if hook.is_null() {
+            eprintln!("[hotkey] SetWindowsHookExW falhou");
+            return;
+        }
+        let mut msg: MSG = std::mem::zeroed();
+        while GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) > 0 {}
     });
 }
 
@@ -812,10 +891,15 @@ fn set_autostart(app: AppHandle, enabled: bool) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn save_settings(state: tauri::State<Arc<Shared>>, settings: Settings) -> Result<(), String> {
+fn save_settings(
+    app: AppHandle,
+    state: tauri::State<Arc<Shared>>,
+    settings: Settings,
+) -> Result<(), String> {
     persist_settings(&settings)?;
     *state.groups.lock().unwrap() = parse_hotkey(&settings.hotkey);
     let warm_local = settings.stt_provider == "local";
+    rebuild_tray_menu(&app, &settings);
     *state.settings.lock().unwrap() = settings;
     if warm_local {
         let shared = state.inner().clone();
@@ -905,6 +989,35 @@ fn get_diagnostics(state: tauri::State<Arc<Shared>>) -> Diagnostics {
     }
 }
 
+fn build_tray_menu(app: &AppHandle, s: &Settings) -> tauri::Result<Menu<tauri::Wry>> {
+    let items: Vec<CheckMenuItem<tauri::Wry>> = s
+        .profiles
+        .iter()
+        .map(|p| {
+            CheckMenuItem::with_id(
+                app,
+                format!("profile:{}", p.name),
+                &p.name,
+                true,
+                p.name == s.active_profile,
+                None::<&str>,
+            )
+        })
+        .collect::<Result<_, _>>()?;
+    let refs: Vec<&dyn tauri::menu::IsMenuItem<tauri::Wry>> =
+        items.iter().map(|i| i as &dyn tauri::menu::IsMenuItem<tauri::Wry>).collect();
+    let perfil = Submenu::with_items(app, "Perfil", true, &refs)?;
+    let show = MenuItem::with_id(app, "show", "Configurações", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "Sair", true, None::<&str>)?;
+    Menu::with_items(app, &[&perfil, &show, &quit])
+}
+
+fn rebuild_tray_menu(app: &AppHandle, s: &Settings) {
+    if let (Some(tray), Ok(menu)) = (app.tray_by_id("tray"), build_tray_menu(app, s)) {
+        let _ = tray.set_menu(Some(menu));
+    }
+}
+
 pub fn run() {
     let (settings, first_run) = load_settings();
     // migra chaves em texto plano para DPAPI na primeira oportunidade
@@ -955,10 +1068,9 @@ pub fn run() {
                 let _ = o.set_ignore_cursor_events(true);
             }
 
-            let show = MenuItem::with_id(app, "show", "Configurações", true, None::<&str>)?;
-            let quit = MenuItem::with_id(app, "quit", "Sair", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show, &quit])?;
-            TrayIconBuilder::new()
+            let menu_settings = shared_setup.settings.lock().unwrap().clone();
+            let menu = build_tray_menu(app.handle(), &menu_settings)?;
+            TrayIconBuilder::with_id("tray")
                 .icon(app.default_window_icon().unwrap().clone())
                 .menu(&menu)
                 .show_menu_on_left_click(false)
@@ -976,15 +1088,29 @@ pub fn run() {
                     }
                 })
                 .tooltip("Open Flow — segure o atalho para ditar")
-                .on_menu_event(move |app, event| match event.id.as_ref() {
-                    "show" => {
-                        if let Some(w) = app.get_webview_window("main") {
-                            let _ = w.show();
-                            let _ = w.set_focus();
-                        }
+                .on_menu_event(move |app, event| {
+                    if let Some(name) = event.id.as_ref().strip_prefix("profile:") {
+                        let shared = app.state::<Arc<Shared>>();
+                        let s = {
+                            let mut g = shared.settings.lock().unwrap();
+                            g.active_profile = name.to_string();
+                            g.clone()
+                        };
+                        let _ = persist_settings(&s);
+                        rebuild_tray_menu(app, &s);
+                        let _ = app.emit("settings_changed", ());
+                        return;
                     }
-                    "quit" => app.exit(0),
-                    _ => {}
+                    match event.id.as_ref() {
+                        "show" => {
+                            if let Some(w) = app.get_webview_window("main") {
+                                let _ = w.show();
+                                let _ = w.set_focus();
+                            }
+                        }
+                        "quit" => app.exit(0),
+                        _ => {}
+                    }
                 })
                 .build(app)?;
             Ok(())

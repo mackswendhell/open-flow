@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import Overlay from "./Overlay";
+import canalImg from "./assets/canal.png";
+import pixQrImg from "./assets/pix-qr.png";
 import "./App.css";
 
 export interface Profile {
@@ -57,7 +61,7 @@ interface Diagnostics {
   recent: HistoryEntry[];
 }
 
-const TABS = ["Geral", "Insights", "Perfis", "Dicionário", "Snippets", "Histórico", "Diagnóstico"] as const;
+const TABS = ["Geral", "Insights", "Perfis", "Dicionário", "Snippets", "Histórico", "Diagnóstico", "Apoie"] as const;
 type Tab = (typeof TABS)[number];
 
 function App() {
@@ -77,6 +81,13 @@ function SettingsApp() {
 
   useEffect(() => {
     invoke<Settings>("get_settings").then(setSettings);
+    // troca de perfil pela bandeja: recarrega para a UI não sobrescrever com estado velho
+    const un = listen("settings_changed", () => {
+      invoke<Settings>("get_settings").then(setSettings);
+    });
+    return () => {
+      un.then((f) => f());
+    };
   }, []);
 
   useEffect(() => {
@@ -111,7 +122,17 @@ function SettingsApp() {
     <div className="shell">
       <aside className="sidebar">
         <div className="brand">
-          <span className="brand-mark">◠◡</span> Open Flow
+          <svg className="brand-mark" width="22" height="13" viewBox="0 0 28 16" fill="currentColor" aria-hidden>
+            <rect x="1" y="7.4" width="26" height="1.2" rx="0.6" />
+            <rect x="4" y="6" width="2.4" height="4" rx="1.2" />
+            <rect x="6.93" y="4.75" width="2.4" height="6.5" rx="1.2" />
+            <rect x="9.87" y="3" width="2.4" height="10" rx="1.2" />
+            <rect x="12.8" y="1.5" width="2.4" height="13" rx="1.2" />
+            <rect x="15.73" y="3" width="2.4" height="10" rx="1.2" />
+            <rect x="18.67" y="4.75" width="2.4" height="6.5" rx="1.2" />
+            <rect x="21.6" y="6" width="2.4" height="4" rx="1.2" />
+          </svg>{" "}
+          Open Flow
         </div>
         <nav>
           {TABS.map((t) => (
@@ -130,6 +151,7 @@ function SettingsApp() {
         {tab === "Snippets" && <SnippetsTab s={settings} patch={patch} />}
         {tab === "Histórico" && <HistoryTab s={settings} patch={patch} />}
         {tab === "Diagnóstico" && <DiagTab />}
+        {tab === "Apoie" && <ApoieTab />}
       </main>
     </div>
   );
@@ -392,7 +414,9 @@ function ProfilesTab({ s, patch }: TabProps) {
       <h1>Perfis de escrita</h1>
       <p className="hint">
         O perfil ativo define o estilo que a IA aplica ao texto ditado. As regras de limpeza
-        (remover hesitações e autocorreções) valem para todos.
+        (remover hesitações e autocorreções) valem para todos. O campo de texto de cada perfil
+        é a instrução dada à IA — descreva ali a personalidade, o tom e o formato que o texto
+        final deve ter.
       </p>
       {s.profiles.map((p, i) => (
         <div key={i} className={`card ${p.name === s.active_profile ? "card-active" : ""}`}>
@@ -417,6 +441,7 @@ function ProfilesTab({ s, patch }: TabProps) {
           <textarea
             rows={2}
             value={p.style}
+            placeholder='Instrução de estilo para a IA — personalidade, tom e formato do texto. Ex.: "e-mail curto e cordial, com saudação e fecho"'
             onChange={(e) => update(i, { style: e.target.value })}
           />
         </div>
@@ -717,6 +742,52 @@ function DiagTab() {
         <div className="card">
           <b>Latência média (últimos {d.recent.length})</b>
           <div>{avg !== null ? `${avg.toFixed(2)}s do soltar ao texto` : "sem dados"}</div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+const PIX_KEY = "mackspls@hotmail.com";
+
+function ApoieTab() {
+  const [copied, setCopied] = useState(false);
+  return (
+    <section>
+      <h1>Apoie o Open Flow</h1>
+      <p className="hint">
+        O Open Flow é gratuito e open source, criado para tornar a escrita por voz mais
+        acessível, prática e inteligente.
+      </p>
+      <div className="diag-grid apoie">
+        <div className="card">
+          <b>Quem faz</b>
+          <img src={canalImg} alt="Canal Macks Wendhell — Inteligência Aplicada" />
+          <p>
+            Conteúdos práticos sobre IA, trabalho e produtividade no canal do criador do app.
+          </p>
+          <button onClick={() => openUrl("https://www.youtube.com/@mackswendhell")}>
+            Conhecer o canal
+          </button>
+        </div>
+        <div className="card">
+          <b>Apoio voluntário</b>
+          <img src={pixQrImg} alt="QR code Pix" className="apoie-qr" />
+          <p>
+            Se o app facilita seu trabalho, você pode apoiar o desenvolvimento com uma
+            contribuição via Pix — qualquer valor ajuda a manter o projeto ativo. O apoio é
+            totalmente opcional: o Open Flow continuará gratuito e aberto para todos.
+          </p>
+          <button
+            onClick={() =>
+              navigator.clipboard.writeText(PIX_KEY).then(() => {
+                setCopied(true);
+                window.setTimeout(() => setCopied(false), 2000);
+              })
+            }
+          >
+            {copied ? "✓ chave copiada" : `Copiar chave Pix (${PIX_KEY})`}
+          </button>
         </div>
       </div>
     </section>
