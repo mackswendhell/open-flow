@@ -1,13 +1,13 @@
 <p align="center"><img src="docs/logo.png" width="128" alt="Open Flow"></p>
 <h1 align="center">Open Flow</h1>
 <p align="center"><b>Segure uma tecla, fale, solte — o texto sai pronto onde o cursor estiver.</b><br>
-Ditado inteligente para Windows: transcrição + limpeza + formatação por perfil, em ~2s e R$ 0/mês.</p>
+Ditado inteligente para Windows e macOS: transcrição + limpeza + formatação por perfil, em ~2s e R$ 0/mês.</p>
 <p align="center">
   <a href="../../releases"><img src="https://img.shields.io/github/v/release/mackswendhell/open-flow" alt="release"></a>
-  <img src="https://img.shields.io/badge/plataforma-Windows%2011-blue" alt="Windows 11">
+  <img src="https://img.shields.io/badge/plataforma-Windows%2011%20%7C%20macOS-blue" alt="Windows 11 | macOS">
 </p>
 
-Segure **Ctrl+Win**, fale, solte. O que você disse é transcrito, limpo (sem hesitações e
+Segure **Ctrl+Win** (Windows) ou **Ctrl+Option** (Mac), fale, solte. O que você disse é transcrito, limpo (sem hesitações e
 autocorreções da fala) e formatado no estilo do perfil ativo — e-mail, jurídico, WhatsApp,
 roteiro — direto no campo onde o cursor estiver.
 
@@ -27,11 +27,24 @@ de crédito) e do instalador.
 
 **1. Baixe e instale**
 
+*Windows:*
+
 - Vá em [Releases](../../releases) e baixe o `OpenFlow_x64-setup.exe` mais recente
 - Execute. O Windows SmartScreen vai avisar que o app não é reconhecido (ele não tem assinatura
   digital paga): clique em **"Mais informações" → "Executar assim mesmo"**. O código-fonte
   completo está neste repositório para quem quiser auditar.
 - Ao final, o Open Flow aparece como um ícone na bandeja do sistema (perto do relógio)
+
+*macOS (Apple Silicon):*
+
+- Vá em [Releases](../../releases) e baixe o `OpenFlow_x.y.z_aarch64.dmg` mais recente
+- Abra o DMG e arraste o Open Flow para **Aplicativos**
+- Na primeira abertura, o Gatekeeper vai bloquear (app sem assinatura paga da Apple): vá em
+  **Ajustes → Privacidade e Segurança** e clique em **"Abrir Assim Mesmo"**
+- Conceda as permissões que o app pedir: **Acessibilidade** e **Monitoramento de Entrada**
+  (para o atalho global) e **Microfone**. Se alguma não aparecer, adicione o Open Flow
+  manualmente em Ajustes → Privacidade e Segurança
+- O app fica como um ícone na barra de menus (sem ícone no Dock)
 
 **2. Crie as duas chaves gratuitas**
 
@@ -51,8 +64,8 @@ Ambas usam login Google e não pedem cartão.
 
 **4. Use**
 
-Clique em qualquer campo de texto (e-mail, WhatsApp Web, Word...), **segure Ctrl+Win, fale, e
-solte**. Uma onda discreta aparece no rodapé da tela enquanto você fala; ~2 segundos depois de
+Clique em qualquer campo de texto (e-mail, WhatsApp Web, Word...), **segure Ctrl+Win (Windows)
+ou Ctrl+Option (Mac), fale, e solte**. Uma onda discreta aparece no rodapé da tela enquanto você fala; ~2 segundos depois de
 soltar, o texto limpo aparece onde o cursor estava. Na aba **Perfis** você escolhe o estilo do
 texto (natural, e-mail, jurídico formal, WhatsApp curto, roteiro).
 
@@ -60,8 +73,8 @@ Notas:
 - **Privacidade**: o áudio vai para a Groq e o texto para o Google (free tiers podem usar dados
   para treino). Para transcrição 100% local/offline, veja "Modo local" abaixo — exige GPU NVIDIA
   e Python.
-- O app se registra para **iniciar com o Windows** automaticamente na primeira execução
-  (dá para desligar em Configurações → Geral → "Iniciar com o Windows").
+- O app se registra para **iniciar com o sistema** automaticamente na primeira execução
+  (dá para desligar em Configurações → Geral).
 - Sem a chave Gemini o texto sai bruto (sem limpeza); sem a chave Groq (e sem modo local) o
   ditado não funciona.
 
@@ -84,7 +97,8 @@ baixado automaticamente.
 ## Arquitetura
 
 ```
-[Hook de teclado global (Rust/rdev)] ── segura Ctrl+Win ──> [cpal grava WAV do microfone]
+[Hook de teclado global (Rust: WH_KEYBOARD_LL no Windows / CGEventTap no Mac)]
+        segura Ctrl+Win (Win) ou Ctrl+Option (Mac) ──> [cpal grava WAV do microfone]
         solta ↓
 [Transcrição (STT)]  Groq whisper-large-v3-turbo (nuvem, padrão)
                      ⇅ fallback automático bidirecional
@@ -92,7 +106,7 @@ baixado automaticamente.
         texto bruto ↓
 [Reescrita]  Gemini Flash (free tier) + regras fixas + dicionário + perfil de escrita ativo
         texto final ↓
-[Inserção]  clipboard + Ctrl+V sintético (com backup/restauração do clipboard)
+[Inserção]  clipboard + Ctrl+V/Cmd+V sintético (com backup/restauração do clipboard)
 ```
 
 - **App**: Tauri 2 (Rust) + React/TypeScript — bandeja do sistema, overlay de ondas reativas
@@ -100,8 +114,12 @@ baixado automaticamente.
   Dicionário, Snippets, Histórico, Diagnóstico), temas claro/escuro.
 - **Sidecar STT local**: `sidecar/stt_server.py` — servidor HTTP local com faster-whisper na
   GPU; morre junto com o app (vigia o PID pai) e recusa porta duplicada.
-- **Dados**: tudo local em `%APPDATA%\OpenFlow\` (settings.json com as chaves, history.jsonl).
+- **Dados**: tudo local em `%APPDATA%\OpenFlow\` (Windows) ou
+  `~/Library/Application Support/OpenFlow/` (Mac) — settings.json com as chaves, history.jsonl.
   Histórico é desligável e apagável pela UI.
+- **Plataformas**: mesmo código, com a camada específica isolada em
+  `app/src-tauri/src/platform/{windows,macos}.rs` (hook de teclado, cofre de chaves,
+  atalho de colar, sidecar).
 
 ## Decisões de arquitetura e porquês
 
@@ -111,14 +129,15 @@ baixado automaticamente.
 | Reescrita no Gemini Flash free tier | Menor latência (~1s) e custo zero via API oficial. Sem chave, o app degrada para texto bruto corrigido pelo próprio Whisper. |
 | Não usar conta ChatGPT Plus como "API" | Não existe ponte legítima Plus→API; automação do ChatGPT web viola ToS e quebra fácil. Caminhos oficiais mapeados (Codex CLI, Claude CLI) ficam como providers futuros. |
 | Tauri 2 em vez de Electron | Tray + overlay com ~11MB de exe e pouca RAM residente; UI em React/TS (stack já dominada). |
-| Hook de teclado de baixo nível (rdev) | Único jeito de detectar press-and-hold global (a API de hotkey comum não emite "soltou"). Suporta combos de modificadores (Ctrl+Win) e modo toggle. |
-| Inserção via clipboard+Ctrl+V com restauração | Método mais compatível do Windows; fallback natural: o texto fica no clipboard se o app alvo bloquear paste (ex.: janelas elevadas/UIPI). |
+| Hook de teclado de baixo nível próprio (WH_KEYBOARD_LL / CGEventTap) | Único jeito de detectar press-and-hold global (a API de hotkey comum não emite "soltou"). Suporta combos de modificadores e modo toggle. O rdev foi removido: chamava ToUnicode dentro do hook e consumia as dead keys (~/^) do teclado ABNT2. |
+| Inserção via clipboard+Ctrl+V/Cmd+V com restauração | Método mais compatível; fallback natural: o texto fica no clipboard se o app alvo bloquear paste (ex.: janelas elevadas/UIPI). |
+| Port macOS no mesmo repositório (`platform/` + `#[cfg]`) | Uma base de código, sem fork. Equivalências: DPAPI→Keychain, WH_KEYBOARD_LL→CGEventTap listen-only, Ctrl+V→Cmd+V com keycode cru. Atalho padrão do Mac é Ctrl+Option (Ctrl+Cmd foi descartado: Ctrl+Cmd+Q bloqueia a tela). |
 | Prompt de reescrita com regras invioláveis + perfil | Regras fixas (manter só a versão final das autocorreções, não inventar fatos) valem sempre; o perfil só muda o estilo (Jurídico formal, E-mail, WhatsApp, Roteiro, Bruto). |
 | Código fora do OneDrive (`C:\dev\open-flow`) | `target/` do Rust + `node_modules` em pasta sincronizada = builds lentos, conflitos de sync e locks de linker. |
 
 ## Rodando do zero
 
-Pré-requisitos: Windows 11, Node 18+, Rust (rustup + MSVC Build Tools), Python 3.11+.
+**Windows** — pré-requisitos: Windows 11, Node 18+, Rust (rustup + MSVC Build Tools), Python 3.11+.
 
 ```powershell
 # 1. sidecar (STT local de fallback)
@@ -130,6 +149,16 @@ cd app
 npm install
 npm run tauri build -- --no-bundle
 # exe em app\src-tauri\target\release\app.exe
+```
+
+**macOS** — pré-requisitos: Node 18+, Rust (rustup). O STT local na GPU é específico do
+Windows/NVIDIA; no Mac o padrão é a Groq (nuvem).
+
+```bash
+cd app
+npm install
+npm run tauri build
+# bundle em app/src-tauri/target/release/bundle/macos/OpenFlow.app (+ .dmg em bundle/dmg/)
 ```
 
 Chaves (grátis, coladas na UI em Configurações → Geral):
@@ -150,6 +179,9 @@ Autostart: atalho para o exe em `shell:startup`.
   claro/escuro, overlay com 2 estilos de onda e ganho automático de microfone.
 - **STT híbrido**: provedor configurável Groq/local com fallback bidirecional; com Groq ativo
   o modelo local nem carrega na GPU no boot.
+- **Port macOS**: a camada de plataforma foi isolada em `platform/{windows,macos}.rs` e o app
+  passou a rodar nativo no Mac (Apple Silicon) — CGEventTap para o atalho, Keychain para as
+  chaves, Cmd+V para inserção, ícone template na barra de menus, atalho padrão Ctrl+Option.
 
 Bugs memoráveis (e suas lições, gravadas como proteções no código):
 - Janela extra do Tauri v2 fora de `capabilities/default.json` → eventos negados em silêncio
@@ -161,10 +193,15 @@ Bugs memoráveis (e suas lições, gravadas como proteções no código):
   com vigia do PID pai + `allow_reuse_address=False`.
 - Testes de hotkey por injeção de tecla (keybd_event) passaram a ser filtrados (provável
   anti-keylogger do antivírus) — validação de atalho é sempre física.
+- No Mac, o overlay só aparecia com a janela de configurações aberta: janelas pertencem a um
+  único Space por padrão (corrigido com `visibleOnAllWorkspaces` + collection behavior) e o
+  App Nap suspendia o event tap quando não havia janela visível (corrigido com
+  `NSProcessInfo beginActivityWithOptions`).
 
 ## Pendências mapeadas
 
-- Assinatura de código (eliminar o aviso do SmartScreen) — quando a distribuição justificar
+- Assinatura de código paga (eliminar o aviso do SmartScreen no Windows e o bloqueio do
+  Gatekeeper no Mac) — quando a distribuição justificar
 
 Já entregues desde a v0.1.0: instalador NSIS, autostart com toggle, idiomas de fala/saída com
 tradução, dicionário com campos separados, single-instance, chaves criptografadas via DPAPI.

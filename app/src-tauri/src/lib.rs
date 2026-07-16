@@ -11,6 +11,8 @@ use tauri::menu::{CheckMenuItem, Menu, MenuItem, Submenu};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Emitter, Manager, PhysicalPosition};
 
+mod platform;
+
 const RULES: &str = "Você é um editor de ditado. Receberá a transcrição literal de uma fala em pt-BR.\n\
 Regras invioláveis:\n\
 1. Quando o falante se corrige (\"não, melhor...\", \"deixa eu corrigir...\", \"quer dizer...\"), mantenha APENAS a versão final e descarte a descartada.\n\
@@ -65,10 +67,41 @@ fn default_profiles() -> Vec<Profile> {
     ]
 }
 
+#[cfg(windows)]
+fn default_hotkey() -> String {
+    "Ctrl+Win".into()
+}
+
+// Ctrl+Option: a combinação mais "vazia" do macOS. Ctrl+Cmd foi descartado
+// porque letra acidental durante o hold dispara combos do sistema
+// (Ctrl+Cmd+Q trava a tela).
+#[cfg(target_os = "macos")]
+fn default_hotkey() -> String {
+    "Ctrl+Option".into()
+}
+
+#[cfg(windows)]
+fn default_sidecar_paths() -> (String, String) {
+    (
+        r"C:\dev\open-flow\.venv\Scripts\python.exe".into(),
+        r"C:\dev\open-flow\sidecar\stt_server.py".into(),
+    )
+}
+
+#[cfg(target_os = "macos")]
+fn default_sidecar_paths() -> (String, String) {
+    let home = dirs::home_dir().unwrap_or_default();
+    (
+        home.join("dev/open-flow/.venv/bin/python").to_string_lossy().into_owned(),
+        home.join("dev/open-flow/sidecar/stt_server.py").to_string_lossy().into_owned(),
+    )
+}
+
 impl Default for Settings {
     fn default() -> Self {
+        let (python, sidecar) = default_sidecar_paths();
         Settings {
-            hotkey: "Ctrl+Win".into(),
+            hotkey: default_hotkey(),
             mode: "hold".into(),
             mic: None,
             stt_provider: "groq".into(),
@@ -86,8 +119,8 @@ impl Default for Settings {
             snippets: Vec::new(),
             history_enabled: true,
             // ponytail: caminhos desta máquina; viram recurso empacotado na fase 3
-            python: r"C:\dev\open-flow\.venv\Scripts\python.exe".into(),
-            sidecar: r"C:\dev\open-flow\sidecar\stt_server.py".into(),
+            python,
+            sidecar,
             stt_port: 17765,
         }
     }
@@ -114,87 +147,25 @@ fn settings_path() -> std::path::PathBuf {
     config_dir().join("settings.json")
 }
 
-// --- DPAPI: chaves criptografadas por usuário do Windows no settings.json ---
+// --- Segredos: DPAPI (Windows) ⇄ Keychain (macOS); no disco fica "enc:..." ---
 const ENC_PREFIX: &str = "enc:";
 
-mod dpapi {
-    use base64::Engine;
-    use windows_sys::Win32::Foundation::LocalFree;
-    use windows_sys::Win32::Security::Cryptography::{
-        CryptProtectData, CryptUnprotectData, CRYPT_INTEGER_BLOB, CRYPTPROTECT_UI_FORBIDDEN,
-    };
-
-    fn b64() -> base64::engine::GeneralPurpose {
-        base64::engine::general_purpose::STANDARD
-    }
-
-    pub fn protect(plain: &str) -> Option<String> {
-        unsafe {
-            let input = CRYPT_INTEGER_BLOB {
-                cbData: plain.len() as u32,
-                pbData: plain.as_ptr() as *mut u8,
-            };
-            let mut out = CRYPT_INTEGER_BLOB { cbData: 0, pbData: std::ptr::null_mut() };
-            if CryptProtectData(
-                &input,
-                std::ptr::null(),
-                std::ptr::null(),
-                std::ptr::null(),
-                std::ptr::null(),
-                CRYPTPROTECT_UI_FORBIDDEN,
-                &mut out,
-            ) == 0
-            {
-                return None;
-            }
-            let bytes = std::slice::from_raw_parts(out.pbData, out.cbData as usize).to_vec();
-            LocalFree(out.pbData as _);
-            Some(b64().encode(bytes))
-        }
-    }
-
-    pub fn unprotect(encoded: &str) -> Option<String> {
-        let bytes = b64().decode(encoded).ok()?;
-        unsafe {
-            let input = CRYPT_INTEGER_BLOB {
-                cbData: bytes.len() as u32,
-                pbData: bytes.as_ptr() as *mut u8,
-            };
-            let mut out = CRYPT_INTEGER_BLOB { cbData: 0, pbData: std::ptr::null_mut() };
-            if CryptUnprotectData(
-                &input,
-                std::ptr::null_mut(),
-                std::ptr::null(),
-                std::ptr::null(),
-                std::ptr::null(),
-                CRYPTPROTECT_UI_FORBIDDEN,
-                &mut out,
-            ) == 0
-            {
-                return None;
-            }
-            let plain = std::slice::from_raw_parts(out.pbData, out.cbData as usize).to_vec();
-            LocalFree(out.pbData as _);
-            String::from_utf8(plain).ok()
-        }
-    }
-}
-
-fn decrypt_key(v: &Option<String>) -> Option<String> {
+/// `name` identifica o item no cofre da plataforma (o Keychain precisa; o DPAPI ignora)
+fn decrypt_key(name: &str, v: &Option<String>) -> Option<String> {
     v.as_ref()
         .map(|s| match s.strip_prefix(ENC_PREFIX) {
-            Some(b64) => dpapi::unprotect(b64).unwrap_or_default(),
+            Some(stored) => platform::unprotect_secret(name, stored).unwrap_or_default(),
             None => s.clone(),
         })
         .filter(|s| !s.is_empty())
 }
 
-fn encrypt_key(v: &Option<String>) -> Option<String> {
+fn encrypt_key(name: &str, v: &Option<String>) -> Option<String> {
     v.as_ref().filter(|s| !s.is_empty()).map(|s| {
         if s.starts_with(ENC_PREFIX) {
             s.clone()
         } else {
-            dpapi::protect(s)
+            platform::protect_secret(name, s)
                 .map(|b| format!("{ENC_PREFIX}{b}"))
                 .unwrap_or_else(|| s.clone())
         }
@@ -204,8 +175,8 @@ fn encrypt_key(v: &Option<String>) -> Option<String> {
 /// grava no disco com as chaves criptografadas (em memória ficam em texto)
 fn persist_settings(s: &Settings) -> Result<(), String> {
     let mut disk = s.clone();
-    disk.gemini_api_key = encrypt_key(&disk.gemini_api_key);
-    disk.groq_api_key = encrypt_key(&disk.groq_api_key);
+    disk.gemini_api_key = encrypt_key("gemini_api_key", &disk.gemini_api_key);
+    disk.groq_api_key = encrypt_key("groq_api_key", &disk.groq_api_key);
     let path = settings_path();
     std::fs::create_dir_all(path.parent().unwrap()).map_err(|e| e.to_string())?;
     std::fs::write(&path, serde_json::to_string_pretty(&disk).map_err(|e| e.to_string())?)
@@ -226,8 +197,8 @@ fn load_settings() -> (Settings, bool) {
                 if s.profiles.is_empty() {
                     s.profiles = default_profiles();
                 }
-                s.gemini_api_key = decrypt_key(&s.gemini_api_key);
-                s.groq_api_key = decrypt_key(&s.groq_api_key);
+                s.gemini_api_key = decrypt_key("gemini_api_key", &s.gemini_api_key);
+                s.groq_api_key = decrypt_key("groq_api_key", &s.groq_api_key);
                 return (s, false);
             }
             Err(e) => {
@@ -243,24 +214,13 @@ fn load_settings() -> (Settings, bool) {
     (s, true)
 }
 
-fn vk_from_name(name: &str) -> u32 {
-    match name {
-        "F1" => 0x70, "F2" => 0x71, "F3" => 0x72, "F4" => 0x73, "F5" => 0x74, "F6" => 0x75,
-        "F7" => 0x76, "F8" => 0x77, "F10" => 0x79, "F11" => 0x7A, "F12" => 0x7B,
-        "SCROLLLOCK" => 0x91, "PAUSE" => 0x13, "CAPSLOCK" => 0x14,
-        "INSERT" => 0x2D, "HOME" => 0x24, "END" => 0x23,
-        _ => 0x78, // F9
-    }
-}
-
+/// keycodes por plataforma (VK no Windows, CGKeyCode no mac) vêm de platform::
 fn parse_hotkey(s: &str) -> Vec<Vec<u32>> {
     s.split('+')
-        .map(|t| match t.trim().to_uppercase().as_str() {
-            "CTRL" | "CONTROL" => vec![0xA2, 0xA3], // L/RCONTROL
-            "WIN" | "META" | "SUPER" => vec![0x5B, 0x5C], // L/RWIN
-            "ALT" => vec![0xA4, 0xA5],   // LMENU/RMENU (AltGr = RMENU)
-            "SHIFT" => vec![0xA0, 0xA1], // L/RSHIFT
-            other => vec![vk_from_name(other)],
+        .map(|t| {
+            let name = t.trim().to_uppercase();
+            platform::modifier_group(&name)
+                .unwrap_or_else(|| vec![platform::key_from_name(&name)])
         })
         .collect()
 }
@@ -406,7 +366,7 @@ fn ensure_sidecar(shared: &Shared, s: &Settings) -> Result<(), String> {
         if let Some(c) = guard.as_mut() {
             let _ = c.kill();
         }
-        *guard = spawn_sidecar(s);
+        *guard = platform::spawn_sidecar(s);
         if guard.is_none() {
             return Err("não foi possível iniciar a transcrição local".into());
         }
@@ -573,26 +533,13 @@ fn apply_snippets(text: &str, snippets: &[Snippet]) -> String {
 }
 
 fn insert_text(text: &str) -> Result<(), String> {
-    use enigo::{Direction, Enigo, Key, Keyboard};
-    use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
     let mut clip = arboard::Clipboard::new().map_err(|e| e.to_string())?;
     let backup = clip.get_text().ok();
     clip.set_text(text).map_err(|e| e.to_string())?;
     std::thread::sleep(Duration::from_millis(60));
-    // espera Shift/Ctrl/Alt/Win físicos soltarem: modificador físico + V sintético
-    // formaria combos do sistema (Ctrl+Shift troca layout de teclado, Win+V etc.)
-    let deadline = Instant::now() + Duration::from_secs(1);
-    while Instant::now() < deadline
-        && [0x10i32, 0x11, 0x12, 0x5B, 0x5C]
-            .iter()
-            .any(|&vk| unsafe { GetAsyncKeyState(vk) } as u16 & 0x8000 != 0)
-    {
-        std::thread::sleep(Duration::from_millis(15));
-    }
-    let mut enigo = Enigo::new(&enigo::Settings::default()).map_err(|e| e.to_string())?;
-    enigo.key(Key::Control, Direction::Press).map_err(|e| e.to_string())?;
-    enigo.key(Key::Other(0x56), Direction::Click).map_err(|e| e.to_string())?; // VK_V cru, independe de layout
-    enigo.key(Key::Control, Direction::Release).map_err(|e| e.to_string())?;
+    // modificador físico ainda pressionado + V sintético formaria combos do sistema
+    platform::wait_modifiers_released(Duration::from_secs(1));
+    platform::paste_shortcut()?;
     std::thread::sleep(Duration::from_millis(300));
     if let Some(b) = backup {
         let _ = clip.set_text(b);
@@ -754,18 +701,14 @@ fn spawn_pipeline(shared: Arc<Shared>, app: AppHandle) -> Sender<Cmd> {
     tx
 }
 
-// Hook WH_KEYBOARD_LL próprio: só rastreia keydown/keyup de VKs. O rdev chamava
-// ToUnicode dentro do hook, o que consome dead keys (~/^) do sistema inteiro.
+// Estado compartilhado do rastreador de atalho: alimentado pelo hook LL no
+// Windows e pelo CGEventTap no macOS (ambos em platform::).
 struct HookState {
     shared: Arc<Shared>,
     tx: Sender<Cmd>,
     pressed: HashSet<u32>,
     active: bool,
     recording: bool,
-}
-
-thread_local! {
-    static HOOK_STATE: std::cell::RefCell<Option<HookState>> = const { std::cell::RefCell::new(None) };
 }
 
 fn handle_key(st: &mut HookState, vk: u32, down: bool) {
@@ -794,76 +737,6 @@ fn handle_key(st: &mut HookState, vk: u32, down: bool) {
         if mode != "toggle" && st.recording {
             st.recording = false;
             let _ = st.tx.send(Cmd::Stop);
-        }
-    }
-}
-
-unsafe extern "system" fn keyboard_hook_proc(code: i32, wparam: usize, lparam: isize) -> isize {
-    use windows_sys::Win32::UI::WindowsAndMessaging::{
-        CallNextHookEx, KBDLLHOOKSTRUCT, LLKHF_INJECTED, WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN,
-        WM_SYSKEYUP,
-    };
-    if code >= 0 {
-        let kb = &*(lparam as *const KBDLLHOOKSTRUCT);
-        // ignora teclas injetadas (o próprio Ctrl+V sintético não polui o estado)
-        if kb.flags & LLKHF_INJECTED == 0 {
-            let msg = wparam as u32;
-            let down = msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN;
-            if down || msg == WM_KEYUP || msg == WM_SYSKEYUP {
-                HOOK_STATE.with(|s| {
-                    if let Some(st) = s.borrow_mut().as_mut() {
-                        handle_key(st, kb.vkCode, down);
-                    }
-                });
-            }
-        }
-    }
-    CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam)
-}
-
-fn spawn_hotkey_listener(shared: Arc<Shared>, tx: Sender<Cmd>) {
-    std::thread::spawn(move || unsafe {
-        use windows_sys::Win32::UI::WindowsAndMessaging::{
-            GetMessageW, SetWindowsHookExW, MSG, WH_KEYBOARD_LL,
-        };
-        HOOK_STATE.with(|s| {
-            *s.borrow_mut() = Some(HookState {
-                shared,
-                tx,
-                pressed: HashSet::new(),
-                active: false,
-                recording: false,
-            });
-        });
-        println!("[hotkey] instalando hook global...");
-        let hook = SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_hook_proc), std::ptr::null_mut(), 0);
-        if hook.is_null() {
-            eprintln!("[hotkey] SetWindowsHookExW falhou");
-            return;
-        }
-        let mut msg: MSG = std::mem::zeroed();
-        while GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) > 0 {}
-    });
-}
-
-fn spawn_sidecar(s: &Settings) -> Option<std::process::Child> {
-    use std::os::windows::process::CommandExt;
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    if !std::path::Path::new(&s.python).exists() || !std::path::Path::new(&s.sidecar).exists() {
-        println!("[sidecar] transcrição local não configurada — operando só em nuvem (Groq)");
-        return None;
-    }
-    match std::process::Command::new(&s.python)
-        .arg(&s.sidecar)
-        .env("OPENFLOW_STT_PORT", s.stt_port.to_string())
-        .env("OPENFLOW_PARENT_PID", std::process::id().to_string())
-        .creation_flags(CREATE_NO_WINDOW)
-        .spawn()
-    {
-        Ok(c) => Some(c),
-        Err(e) => {
-            eprintln!("[sidecar] falha ao iniciar ({e}) — inicie manualmente: {} {}", s.python, s.sidecar);
-            None
         }
     }
 }
@@ -1026,7 +899,7 @@ pub fn run() {
     let start_local = settings.stt_provider != "groq" || !settings.groq_ready();
     let shared = Arc::new(Shared {
         groups: Mutex::new(parse_hotkey(&settings.hotkey)),
-        sidecar: Mutex::new(if start_local { spawn_sidecar(&settings) } else { None }),
+        sidecar: Mutex::new(if start_local { platform::spawn_sidecar(&settings) } else { None }),
         settings: Mutex::new(settings.clone()),
         insert_lock: Mutex::new(()),
     });
@@ -1057,22 +930,62 @@ pub fn run() {
             set_autostart
         ])
         .setup(move |app| {
+            // app de bandeja: no mac o ícone vive só na menu bar, sem Dock
+            #[cfg(target_os = "macos")]
+            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+
+            // impede o App Nap: sem janela visível o macOS suspende o processo e o
+            // event tap do atalho para de responder até o app "acordar"
+            #[cfg(target_os = "macos")]
+            unsafe {
+                use objc2::runtime::AnyObject;
+                use objc2::{class, msg_send};
+                let pi: *mut AnyObject = msg_send![class!(NSProcessInfo), processInfo];
+                let reason: *mut AnyObject = msg_send![
+                    class!(NSString),
+                    stringWithUTF8String: c"hotkey e ditado globais".as_ptr()
+                ];
+                // NSActivityUserInitiatedAllowingIdleSystemSleep
+                let opts: usize = 0x00FF_FFFF & !(1 << 20);
+                let token: *mut AnyObject =
+                    msg_send![pi, beginActivityWithOptions: opts, reason: reason];
+                let _: *mut AnyObject = msg_send![token, retain]; // token vive para sempre
+            }
+
             if first_run {
                 use tauri_plugin_autostart::ManagerExt;
                 let _ = app.autolaunch().enable();
             }
             let tx = spawn_pipeline(shared_setup.clone(), app.handle().clone());
-            spawn_hotkey_listener(shared_setup.clone(), tx);
+            platform::spawn_hotkey_listener(shared_setup.clone(), tx);
 
             if let Some(o) = app.get_webview_window("overlay") {
                 let _ = o.set_ignore_cursor_events(true);
+                // Spaces: sem isto o overlay só existe na mesa onde nasceu (a das
+                // configurações) e "some" quando se dita em outra mesa/tela cheia.
+                // CanJoinAllSpaces (1<<0) | Stationary (1<<4) | FullScreenAuxiliary (1<<8)
+                #[cfg(target_os = "macos")]
+                if let Ok(nsw) = o.ns_window() {
+                    let nsw = nsw as *mut objc2::runtime::AnyObject;
+                    let behavior: usize = (1 << 0) | (1 << 4) | (1 << 8);
+                    unsafe {
+                        let _: () = objc2::msg_send![nsw, setCollectionBehavior: behavior];
+                    }
+                }
             }
 
             let menu_settings = shared_setup.settings.lock().unwrap().clone();
             let menu = build_tray_menu(app.handle(), &menu_settings)?;
-            TrayIconBuilder::with_id("tray")
-                .icon(app.default_window_icon().unwrap().clone())
-                .menu(&menu)
+            let tray = TrayIconBuilder::with_id("tray");
+            // menu bar do mac usa ícone template: só o glifo da onda, monocromático,
+            // e o sistema o adapta ao estilo/tema da barra (como os ícones nativos)
+            #[cfg(target_os = "macos")]
+            let tray = tray
+                .icon(tauri::image::Image::from_bytes(include_bytes!("../icons/tray-template.png"))?)
+                .icon_as_template(true);
+            #[cfg(not(target_os = "macos"))]
+            let tray = tray.icon(app.default_window_icon().unwrap().clone());
+            tray.menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_tray_icon_event(|tray, event| {
                     if let tauri::tray::TrayIconEvent::Click {

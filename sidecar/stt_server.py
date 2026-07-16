@@ -21,12 +21,22 @@ def _watch_parent():
     ppid = int(os.environ.get("OPENFLOW_PARENT_PID", "0"))
     if not ppid:
         return
-    SYNCHRONIZE = 0x00100000
-    h = ctypes.windll.kernel32.OpenProcess(SYNCHRONIZE, False, ppid)
-    if not h:
+    if sys.platform == "win32":
+        SYNCHRONIZE = 0x00100000
+        h = ctypes.windll.kernel32.OpenProcess(SYNCHRONIZE, False, ppid)
+        if not h:
+            os._exit(0)
+        ctypes.windll.kernel32.WaitForSingleObject(h, 0xFFFFFFFF)
         os._exit(0)
-    ctypes.windll.kernel32.WaitForSingleObject(h, 0xFFFFFFFF)
-    os._exit(0)
+    # POSIX: sinal 0 só checa existência; reparentado ao launchd (ppid 1) = pai morreu
+    while True:
+        if os.getppid() == 1:
+            os._exit(0)
+        try:
+            os.kill(ppid, 0)
+        except OSError:
+            os._exit(0)
+        time.sleep(2)
 
 
 threading.Thread(target=_watch_parent, daemon=True).start()

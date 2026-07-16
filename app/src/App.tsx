@@ -7,6 +7,8 @@ import canalImg from "./assets/canal.png";
 import pixQrImg from "./assets/pix-qr.png";
 import "./App.css";
 
+const isMac = navigator.userAgent.includes("Mac");
+
 export interface Profile {
   name: string;
   style: string;
@@ -220,13 +222,18 @@ function GeneralTab({ s, patch }: TabProps) {
           onChange={(e) => patch({ hotkey: e.target.value })}
         />
         <datalist id="hotkeys">
-          {["Ctrl+Win", "Ctrl+Alt", "Win+Shift", "Ctrl+Shift", "F9", "F8", "SCROLLLOCK", "PAUSE"].map(
-            (h) => (
-              <option key={h} value={h} />
-            ),
-          )}
+          {(isMac
+            ? ["Ctrl+Option", "Ctrl+Shift", "Option+Shift", "Ctrl+Cmd", "F9", "F8"]
+            : ["Ctrl+Win", "Ctrl+Alt", "Win+Shift", "Ctrl+Shift", "F9", "F8", "SCROLLLOCK", "PAUSE"]
+          ).map((h) => (
+            <option key={h} value={h} />
+          ))}
         </datalist>
-        <small>Combos de Ctrl, Win, Alt, Shift (ex.: Ctrl+Win) ou tecla única (F9, PAUSE).</small>
+        <small>
+          {isMac
+            ? "Combos de Ctrl, Cmd, Option, Shift (ex.: Ctrl+Option) ou tecla única (F9)."
+            : "Combos de Ctrl, Win, Alt, Shift (ex.: Ctrl+Win) ou tecla única (F9, PAUSE)."}
+        </small>
       </label>
 
       <div className="field">
