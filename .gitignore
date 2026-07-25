@@ -11,3 +11,6 @@ spike/
 # (settings.json com chaves vive em %APPDATA%\OpenFlow, fora do repo)
 *.log
 *.bak
+
+# instruções locais do Claude (contém caminhos e ambiente da máquina)
+CLAUDE.md
