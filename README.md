@@ -29,7 +29,9 @@ de crédito) e do instalador.
 
 *Windows:*
 
-- Vá em [Releases](../../releases) e baixe o `OpenFlow_x64-setup.exe` mais recente
+- Vá em [Releases — Windows (v0.1.5)](../../releases/tag/v0.1.5) e baixe o
+  `OpenFlow_0.1.5_x64-setup.exe` (a v0.1.6 é só do macOS; o instalador Windows mais recente
+  está na v0.1.5)
 - Execute. O Windows SmartScreen vai avisar que o app não é reconhecido (ele não tem assinatura
   digital paga): clique em **"Mais informações" → "Executar assim mesmo"**. O código-fonte
   completo está neste repositório para quem quiser auditar.
@@ -37,7 +39,7 @@ de crédito) e do instalador.
 
 *macOS (Apple Silicon):*
 
-- Vá em [Releases](../../releases) e baixe o `OpenFlow_x.y.z_aarch64.dmg` mais recente
+- Vá em [Releases — macOS](../../releases/latest) e baixe o `OpenFlow_x.y.z_aarch64.dmg` mais recente
 - Abra o DMG e arraste o Open Flow para **Aplicativos**
 - Na primeira abertura, o Gatekeeper vai bloquear (app sem assinatura paga da Apple): vá em
   **Ajustes → Privacidade e Segurança** e clique em **"Abrir Assim Mesmo"**
