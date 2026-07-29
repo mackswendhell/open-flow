@@ -14,3 +14,8 @@ spike/
 
 # instruções locais do Claude (contém caminhos e ambiente da máquina)
 CLAUDE.md
+
+# grafo de conhecimento gerado localmente (graphify)
+graphify-out/
+
+.DS_Store

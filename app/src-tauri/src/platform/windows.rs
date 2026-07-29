@@ -95,6 +95,7 @@ pub fn key_from_name(name: &str) -> u32 {
         "F7" => 0x76, "F8" => 0x77, "F10" => 0x79, "F11" => 0x7A, "F12" => 0x7B,
         "SCROLLLOCK" => 0x91, "PAUSE" => 0x13, "CAPSLOCK" => 0x14,
         "INSERT" => 0x2D, "HOME" => 0x24, "END" => 0x23,
+        "SPACE" => 0x20, "ESC" | "ESCAPE" => 0x1B, "BACKSPACE" => 0x08, "TAB" => 0x09,
         _ => 0x78, // F9
     }
 }

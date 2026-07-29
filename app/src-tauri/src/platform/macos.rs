@@ -6,25 +6,24 @@ use std::time::{Duration, Instant};
 
 use crate::{handle_key, Cmd, HookState, Settings, Shared};
 
-// --- Keychain: as chaves vivem no Keychain do macOS; no settings.json fica só
-// o marcador "enc:keychain" ---
-const KEYCHAIN_SERVICE: &str = "OpenFlow";
-const KEYCHAIN_MARKER: &str = "keychain";
-
-pub fn protect_secret(name: &str, plain: &str) -> Option<String> {
-    keyring::Entry::new(KEYCHAIN_SERVICE, name)
-        .ok()?
-        .set_password(plain)
-        .ok()
-        .map(|_| KEYCHAIN_MARKER.to_string())
+// --- Segredos: no macOS ficam em texto no settings.json (protegido pelas
+// permissões do perfil do usuário).
+//
+// O Keychain foi removido em 2026-07-29: a autorização de leitura de uma entrada
+// é amarrada ao hash do binário, então TODO rebuild assinado disparava um pedido
+// de senha do keychain "login" — e quando essa senha diverge da senha da conta
+// (troca via Apple ID/FileVault), não há o que digitar: o app fica trancado fora
+// das próprias chaves. Decisão do Macks: app local, sem senha. O Windows segue
+// no DPAPI, que é transparente e nunca pergunta nada.
+//
+// Devolver None aqui faz encrypt_key gravar o valor puro e decrypt_key descartar
+// qualquer "enc:" remanescente — a migração acontece sozinha no primeiro load.
+pub fn protect_secret(_name: &str, _plain: &str) -> Option<String> {
+    None
 }
 
-pub fn unprotect_secret(name: &str, stored: &str) -> Option<String> {
-    // valor "enc:" que não é o marcador veio de outra máquina (DPAPI) — indecifrável aqui
-    if stored != KEYCHAIN_MARKER {
-        return None;
-    }
-    keyring::Entry::new(KEYCHAIN_SERVICE, name).ok()?.get_password().ok()
+pub fn unprotect_secret(_name: &str, _stored: &str) -> Option<String> {
+    None
 }
 
 // --- Tabela de teclas (CGKeyCode, não VK) ---
@@ -43,6 +42,7 @@ pub fn key_from_name(name: &str) -> u32 {
         "F1" => 122, "F2" => 120, "F3" => 99, "F4" => 118, "F5" => 96, "F6" => 97,
         "F7" => 98, "F8" => 100, "F10" => 109, "F11" => 103, "F12" => 111,
         "CAPSLOCK" => 57, "INSERT" | "HELP" => 114, "HOME" => 115, "END" => 119,
+        "SPACE" => 49, "ESC" | "ESCAPE" => 53, "BACKSPACE" | "DELETE" => 51, "TAB" => 48,
         _ => 101, // F9
     }
 }

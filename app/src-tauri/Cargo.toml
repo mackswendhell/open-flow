@@ -1,6 +1,6 @@
 [package]
 name = "app"
-version = "0.1.6"
+version = "0.1.7"
 description = "Open Flow — ditado inteligente para Windows e macOS"
 authors = ["Macks Wendhell"]
 edition = "2021"
@@ -38,5 +38,4 @@ windows-sys = { version = "0.60", features = [
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = "0.24"
 core-foundation = "0.10"
-keyring = { version = "3", features = ["apple-native"] }
 objc2 = "0.6"

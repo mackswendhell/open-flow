@@ -21,6 +21,7 @@ export interface Snippet {
 
 export interface Settings {
   hotkey: string;
+  cancel_key: string;
   mode: string;
   mic: string | null;
   stt_provider: string;
@@ -56,6 +57,7 @@ interface Diagnostics {
   stt_provider: string;
   groq_key_set: boolean;
   sidecar_ok: boolean;
+  sidecar_configured: boolean;
   sidecar_device: string;
   default_mic: string;
   gemini_key_set: boolean;
@@ -236,6 +238,18 @@ function GeneralTab({ s, patch }: TabProps) {
         </small>
       </label>
 
+      <label className="field">
+        <span>Cancelar ditado</span>
+        <select
+          value={s.cancel_key}
+          onChange={(e) => patch({ cancel_key: e.target.value })}
+        >
+          <option value="">Desativado</option>
+          <option value="ESC">Esc</option>
+        </select>
+        <small>Durante a gravação, essa tecla descarta o ditado sem inserir nada.</small>
+      </label>
+
       <div className="field">
         <span>Tema</span>
         <label className="switch-row">
@@ -346,6 +360,19 @@ function GeneralTab({ s, patch }: TabProps) {
       <label className="field">
         <span>Modelo de transcrição (Groq)</span>
         <input value={s.groq_model} onChange={(e) => patch({ groq_model: e.target.value })} />
+      </label>
+      <label className="field">
+        <span>Python do modo local</span>
+        <input value={s.python} onChange={(e) => patch({ python: e.target.value })} />
+        <small>
+          Caminho do executável Python com o faster-whisper instalado. Sem ele (e sem o arquivo
+          abaixo), o modo local não funciona nem como fallback da nuvem.
+        </small>
+      </label>
+      <label className="field">
+        <span>Script do sidecar</span>
+        <input value={s.sidecar} onChange={(e) => patch({ sidecar: e.target.value })} />
+        <small>Caminho do stt_server.py. Confira o estado dos dois na aba Diagnóstico.</small>
       </label>
       <label className="field">
         <span>Idioma da fala</span>
@@ -544,8 +571,10 @@ function HistoryTab({ s, patch }: TabProps) {
     (q: string) => invoke<HistoryEntry[]>("get_history", { query: q, limit: 50 }).then(setEntries),
     [],
   );
+  // sem espera, cada tecla relê e reparseia o history.jsonl inteiro do disco
   useEffect(() => {
-    load(query);
+    const t = window.setTimeout(() => load(query), 250);
+    return () => window.clearTimeout(t);
   }, [query, load]);
 
   return (
@@ -733,8 +762,19 @@ function DiagTab() {
           <b>Transcrição (provedor: {d.stt_provider === "groq" ? "Groq nuvem" : "Local GPU"})</b>
           <div>Groq: {d.groq_key_set ? "● chave configurada" : "○ sem chave"}</div>
           <div>
-            Local: {d.sidecar_ok ? `● quente (${d.sidecar_device})` : "○ descarregado (sob demanda)"}
+            Local:{" "}
+            {d.sidecar_ok
+              ? `● quente (${d.sidecar_device})`
+              : d.sidecar_configured
+                ? "○ descarregado (sob demanda)"
+                : "○ não configurado"}
           </div>
+          {!d.sidecar_configured && (
+            <div className="hint">
+              Sem Python e sidecar válidos o modo local nunca sobe — nem como fallback. Configure
+              os caminhos em Geral.
+            </div>
+          )}
         </div>
         <div className="card">
           <b>Microfone padrão</b>
