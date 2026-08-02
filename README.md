@@ -29,9 +29,7 @@ de crédito) e do instalador.
 
 *Windows:*
 
-- Vá em [Releases — Windows (v0.1.5)](../../releases/tag/v0.1.5) e baixe o
-  `OpenFlow_0.1.5_x64-setup.exe` (a v0.1.6 é só do macOS; o instalador Windows mais recente
-  está na v0.1.5)
+- Vá em [Releases](../../releases/latest) e baixe o `OpenFlow_x.y.z_x64-setup.exe` mais recente
 - Execute. O Windows SmartScreen vai avisar que o app não é reconhecido (ele não tem assinatura
   digital paga): clique em **"Mais informações" → "Executar assim mesmo"**. O código-fonte
   completo está neste repositório para quem quiser auditar.
