@@ -620,9 +620,6 @@ fn overlay_show(app: &AppHandle) -> u64 {
             }
         }
         let _ = o.set_always_on_top(true);
-        if let Err(e) = o.show() {
-            overlay_log(&format!("show falhou: {e}"));
-        }
         let _ = app.emit_to("overlay", "overlay_show", style);
     } else {
         overlay_log("janela overlay inexistente");
@@ -630,14 +627,18 @@ fn overlay_show(app: &AppHandle) -> u64 {
     gen
 }
 
-/// só esconde se esta exibição ainda for a atual
+/// só apaga se esta exibição ainda for a atual
+///
+/// A janela do overlay nasce visível e nunca é escondida: no Windows, esconder e
+/// reexibir a janela deixa a webview sem pintar — a janela reaparecia no lugar
+/// certo, no topo, do tamanho certo, e mesmo assim invisível, porque o conteúdo
+/// nunca era apresentado. Quem "some" e "aparece" agora é só o conteúdo, do lado
+/// do React; a janela em si fica parada, transparente e sem capturar cliques.
 fn overlay_hide(app: &AppHandle, gen: u64) {
     if app.state::<Arc<Shared>>().overlay_gen.load(Ordering::SeqCst) != gen {
         return;
     }
-    if let Some(o) = app.get_webview_window("overlay") {
-        let _ = o.hide();
-    }
+    let _ = app.emit_to("overlay", "overlay_hide", ());
 }
 
 fn overlay_status(app: &AppHandle, state: &str, message: &str) {
@@ -679,9 +680,6 @@ fn friendly_error(e: &str) -> String {
 fn overlay_fail(app: &AppHandle, gen: u64, err: &str) {
     if app.state::<Arc<Shared>>().overlay_gen.load(Ordering::SeqCst) != gen {
         return;
-    }
-    if let Some(o) = app.get_webview_window("overlay") {
-        let _ = o.show();
     }
     overlay_status(app, "error", &friendly_error(err));
     let app = app.clone();

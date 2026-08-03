@@ -12,15 +12,18 @@ const SILENCE = 0.006;
 // onda cheia porque o próprio ruído passa a ser o "máximo" da escala
 const PEAK_FLOOR = 0.02;
 
-type State = "recording" | "processing" | "error";
+// a janela vive sempre aberta (ver overlay_hide no Rust): "idle" é o overlay
+// apagado — canvas limpo, nada na tela, loop de animação parado
+type State = "idle" | "recording" | "processing" | "error";
 
 export default function Overlay() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const level = useRef(0);
   const style = useRef("tech");
-  const stateRef = useRef<State>("recording");
+  const stateRef = useRef<State>("idle");
   const reset = useRef(false);
-  const [state, setState] = useState<State>("recording");
+  const restart = useRef<() => void>(() => {});
+  const [state, setState] = useState<State>("idle");
   const [message, setMessage] = useState("");
 
   useEffect(() => {
@@ -46,9 +49,14 @@ export default function Overlay() {
       level.current = 0;
       reset.current = true;
       apply("recording");
+      restart.current();
     });
     const unStatus = listen<{ state: State; message: string }>("overlay_status", (e) => {
       apply(e.payload.state, e.payload.message);
+      restart.current();
+    });
+    const unHide = listen("overlay_hide", () => {
+      apply("idle");
     });
 
     const canvas = canvasRef.current!;
@@ -63,6 +71,7 @@ export default function Overlay() {
     let phase = 0;
     let raf = 0;
     let peak = PEAK_FLOOR;
+    let lastFrame = 0;
     const mid = H / 2;
 
     const drawTech = () => {
@@ -125,6 +134,12 @@ export default function Overlay() {
     };
 
     const draw = () => {
+      lastFrame = performance.now();
+      // apagado: limpa e encerra o loop — nada é reagendado até o próximo ditado
+      if (stateRef.current === "idle" || stateRef.current === "error") {
+        ctx.clearRect(0, 0, W, H);
+        return;
+      }
       if (reset.current) {
         reset.current = false;
         hist.fill(0);
@@ -159,13 +174,34 @@ export default function Overlay() {
       }
       raf = requestAnimationFrame(draw);
     };
-    raf = requestAnimationFrame(draw);
+
+    const startLoop = () => {
+      cancelAnimationFrame(raf);
+      draw();
+    };
+    restart.current = startLoop;
+    startLoop();
+
+    // No Windows o Chromium congela o requestAnimationFrame enquanto a janela está
+    // escondida — e o frame agendado nem sempre volta quando ela reaparece. Como o
+    // loop se reagenda a partir de si mesmo, perder um frame o matava de vez: a
+    // janela voltava a aparecer vazia (é transparente) e o overlay "sumia" até
+    // reiniciar o app, com o ditado funcionando normalmente. No macOS o rAF continua
+    // rodando escondido, por isso o bug nunca apareceu lá.
+    const guard = window.setInterval(() => {
+      const ativo = stateRef.current === "recording" || stateRef.current === "processing";
+      if (ativo && performance.now() - lastFrame > 250) {
+        startLoop();
+      }
+    }, 250);
 
     return () => {
       cancelAnimationFrame(raf);
+      clearInterval(guard);
       unlisten.then((f) => f());
       unShow.then((f) => f());
       unStatus.then((f) => f());
+      unHide.then((f) => f());
     };
   }, []);
 
@@ -182,7 +218,7 @@ export default function Overlay() {
       <canvas
         ref={canvasRef}
         style={{
-          display: state === "error" ? "none" : "block",
+          display: state === "recording" || state === "processing" ? "block" : "none",
           width: `${W}px`,
           height: `${H}px`,
         }}

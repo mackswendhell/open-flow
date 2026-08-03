@@ -37,7 +37,8 @@ de crédito) e do instalador.
 
 *macOS (Apple Silicon):*
 
-- Vá em [Releases — macOS](../../releases/latest) e baixe o `OpenFlow_x.y.z_aarch64.dmg` mais recente
+- Vá em [Releases](../../releases) e baixe o `OpenFlow_x.y.z_aarch64.dmg` mais recente (a v0.1.8
+  corrige um bug só do Windows e ainda não tem build do Mac: lá a atual é a v0.1.7)
 - Abra o DMG e arraste o Open Flow para **Aplicativos**
 - Na primeira abertura, o Gatekeeper vai bloquear (app sem assinatura paga da Apple): vá em
   **Ajustes → Privacidade e Segurança** e clique em **"Abrir Assim Mesmo"**
@@ -214,6 +215,14 @@ Bugs memoráveis (e suas lições, gravadas como proteções no código):
   segurado a combinação vira um atalho do sistema. Passou a ser `Esc`.
 - O normalizador da onda do overlay não pode ser zerado a cada gravação: sem calibração
   anterior o ruído de fundo vira o máximo da escala e as ondas abrem sozinhas no silêncio.
+- No Windows o overlay sumia depois de um tempo de uso e só voltava reiniciando o app, com o
+  ditado funcionando normalmente. Duas tentativas erraram o alvo (reafirmar `always_on_top`,
+  depois reiniciar o loop de `requestAnimationFrame`) porque a hipótese era sempre "a janela
+  não aparece". Medir a janela pelo Win32 durante um ditado real desfez o engano: ela abria no
+  lugar certo, no topo, 380x44, e ficava 1,8s na tela — o que não acontecia era a **pintura**.
+  Esconder e reexibir a janela é o caminho defeituoso do WebView2; a janela passou a nascer
+  visível e nunca mais ser escondida (`overlay_hide` só emite evento), com o React apagando o
+  conteúdo. No macOS o mesmo ciclo sempre funcionou, e foi por isso que o bug era só do Windows.
 
 ## Pendências mapeadas
 
