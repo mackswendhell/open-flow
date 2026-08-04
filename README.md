@@ -37,8 +37,8 @@ de crédito) e do instalador.
 
 *macOS (Apple Silicon):*
 
-- Vá em [Releases](../../releases) e baixe o `OpenFlow_x.y.z_aarch64.dmg` mais recente (a v0.1.8
-  corrige um bug só do Windows e ainda não tem build do Mac: lá a atual é a v0.1.7)
+- Vá em [Releases](../../releases) e baixe o `OpenFlow_x.y.z_aarch64.dmg` mais recente (as v0.1.8
+  e v0.1.9 corrigem bugs só do Windows e ainda não têm build do Mac: lá a atual é a v0.1.7)
 - Abra o DMG e arraste o Open Flow para **Aplicativos**
 - Na primeira abertura, o Gatekeeper vai bloquear (app sem assinatura paga da Apple): vá em
   **Ajustes → Privacidade e Segurança** e clique em **"Abrir Assim Mesmo"**
@@ -223,6 +223,11 @@ Bugs memoráveis (e suas lições, gravadas como proteções no código):
   Esconder e reexibir a janela é o caminho defeituoso do WebView2; a janela passou a nascer
   visível e nunca mais ser escondida (`overlay_hide` só emite evento), com o React apagando o
   conteúdo. No macOS o mesmo ciclo sempre funcionou, e foi por isso que o bug era só do Windows.
+- A janela de configurações abria sozinha no boot: duas entradas de inicialização (a chave do
+  registro do `tauri-plugin-autostart` e um atalho manual em `shell:startup`) subiam duas
+  instâncias, e a segunda caía no callback do `single_instance`, cujo trabalho é justamente
+  mostrar a janela. O autostart passou a registrar `--autostart` e o callback ignora quem vem do
+  boot — abrir o app pela segunda vez a mão continua trazendo as configurações à frente.
 
 ## Pendências mapeadas
 

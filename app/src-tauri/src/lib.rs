@@ -1123,7 +1123,13 @@ pub fn run() {
     let shared_exit = shared.clone();
     let shared_setup = shared.clone();
     tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            // no boot o app pode subir duas vezes (autostart do registro + atalho em
+            // shell:startup, ou o "reabrir apps ao entrar" do Windows). A segunda cai
+            // aqui e abria as configurações na cara do usuário — quem vem do boot só sai.
+            if args.iter().any(|a| a == "--autostart") {
+                return;
+            }
             if let Some(w) = app.get_webview_window("main") {
                 let _ = w.show();
                 let _ = w.set_focus();
@@ -1132,7 +1138,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
-            None,
+            Some(vec!["--autostart"]),
         ))
         .manage(shared)
         .invoke_handler(tauri::generate_handler![
@@ -1168,9 +1174,14 @@ pub fn run() {
                 let _: *mut AnyObject = msg_send![token, retain]; // token vive para sempre
             }
 
-            if first_run {
+            {
                 use tauri_plugin_autostart::ManagerExt;
-                let _ = app.autolaunch().enable();
+                let al = app.autolaunch();
+                // re-habilitar reescreve a chave do registro com os args atuais
+                // (--autostart), inclusive em quem já tinha o autostart de versões antigas
+                if first_run || al.is_enabled().unwrap_or(false) {
+                    let _ = al.enable();
+                }
             }
             let tx = spawn_pipeline(shared_setup.clone(), app.handle().clone());
             platform::spawn_hotkey_listener(shared_setup.clone(), tx);
