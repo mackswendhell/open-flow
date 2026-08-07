@@ -975,6 +975,10 @@ fn get_diagnostics(state: tauri::State<Arc<Shared>>) -> Diagnostics {
     }
 }
 
+fn as_menu_refs(v: &[CheckMenuItem<tauri::Wry>]) -> Vec<&dyn tauri::menu::IsMenuItem<tauri::Wry>> {
+    v.iter().map(|i| i as &dyn tauri::menu::IsMenuItem<tauri::Wry>).collect()
+}
+
 fn build_tray_menu(app: &AppHandle, s: &Settings) -> tauri::Result<Menu<tauri::Wry>> {
     let items: Vec<CheckMenuItem<tauri::Wry>> = s
         .profiles
@@ -990,14 +994,77 @@ fn build_tray_menu(app: &AppHandle, s: &Settings) -> tauri::Result<Menu<tauri::W
             )
         })
         .collect::<Result<_, _>>()?;
-    let refs: Vec<&dyn tauri::menu::IsMenuItem<tauri::Wry>> =
-        items.iter().map(|i| i as &dyn tauri::menu::IsMenuItem<tauri::Wry>).collect();
+    let refs = as_menu_refs(&items);
     let perfil = Submenu::with_items(app, "Perfil", true, &refs)?;
+
+    let langs = |prefix: &str, atual: &str, opts: &[(&str, &str)]| -> tauri::Result<Vec<CheckMenuItem<tauri::Wry>>> {
+        opts.iter()
+            .map(|(code, label)| {
+                CheckMenuItem::with_id(
+                    app,
+                    format!("{prefix}:{code}"),
+                    *label,
+                    true,
+                    *code == atual,
+                    None::<&str>,
+                )
+            })
+            .collect()
+    };
+    let fala_items = langs(
+        "speech",
+        &s.speech_lang,
+        &[
+            ("pt", "Português (Brasil)"),
+            ("en", "English"),
+            ("es", "Español"),
+            ("auto", "Detectar automaticamente"),
+        ],
+    )?;
+    let saida_items = langs(
+        "out",
+        &s.output_lang,
+        &[
+            ("same", "Mesmo da fala"),
+            ("pt", "Português (Brasil)"),
+            ("en", "English"),
+            ("es", "Español"),
+        ],
+    )?;
+    let fala_refs = as_menu_refs(&fala_items);
+    let saida_refs = as_menu_refs(&saida_items);
+    let fala = Submenu::with_items(app, "Fala", true, &fala_refs)?;
+    let saida = Submenu::with_items(app, "Saída", true, &saida_refs)?;
+    let idioma = Submenu::with_items(app, "Idioma", true, &[&fala, &saida])?;
+
+    // atalho de um clique para o par mais usado; desmarcar volta a saída para "mesmo da fala"
+    let pt_en = CheckMenuItem::with_id(
+        app,
+        "lang_pt_en",
+        "PT falado → EN escrito",
+        true,
+        s.speech_lang == "pt" && s.output_lang == "en",
+        None::<&str>,
+    )?;
+
     let copy_last =
         MenuItem::with_id(app, "copy_last", "Copiar último ditado", true, None::<&str>)?;
     let show = MenuItem::with_id(app, "show", "Configurações", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Sair", true, None::<&str>)?;
-    Menu::with_items(app, &[&perfil, &copy_last, &show, &quit])
+    Menu::with_items(app, &[&perfil, &pt_en, &idioma, &copy_last, &show, &quit])
+}
+
+/// altera as configurações no estado, grava em disco e avisa tray e janela
+fn update_settings(app: &AppHandle, f: impl FnOnce(&mut Settings)) {
+    let s = {
+        let shared = app.state::<Arc<Shared>>();
+        let mut g = shared.settings.lock().unwrap();
+        f(&mut g);
+        g.clone()
+    };
+    let _ = persist_settings(&s);
+    rebuild_tray_menu(app, &s);
+    let _ = app.emit("settings_changed", ());
 }
 
 fn rebuild_tray_menu(app: &AppHandle, s: &Settings) {
@@ -1229,19 +1296,28 @@ pub fn run() {
                 })
                 .tooltip("Open Flow — segure o atalho para ditar")
                 .on_menu_event(move |app, event| {
-                    if let Some(name) = event.id.as_ref().strip_prefix("profile:") {
-                        let shared = app.state::<Arc<Shared>>();
-                        let s = {
-                            let mut g = shared.settings.lock().unwrap();
-                            g.active_profile = name.to_string();
-                            g.clone()
-                        };
-                        let _ = persist_settings(&s);
-                        rebuild_tray_menu(app, &s);
-                        let _ = app.emit("settings_changed", ());
+                    let id = event.id.as_ref();
+                    if let Some(name) = id.strip_prefix("profile:") {
+                        let name = name.to_string();
+                        update_settings(app, |g| g.active_profile = name);
                         return;
                     }
-                    match event.id.as_ref() {
+                    if let Some(code) = id.strip_prefix("speech:") {
+                        let code = code.to_string();
+                        update_settings(app, |g| g.speech_lang = code);
+                        return;
+                    }
+                    if let Some(code) = id.strip_prefix("out:") {
+                        let code = code.to_string();
+                        update_settings(app, |g| g.output_lang = code);
+                        return;
+                    }
+                    match id {
+                        "lang_pt_en" => update_settings(app, |g| {
+                            let ligado = g.speech_lang == "pt" && g.output_lang == "en";
+                            g.speech_lang = "pt".into();
+                            g.output_lang = if ligado { "same".into() } else { "en".into() };
+                        }),
                         "copy_last" => {
                             let text = app.state::<Arc<Shared>>().last_text.lock().unwrap().clone();
                             if !text.is_empty() {
