@@ -614,7 +614,10 @@ fn overlay_show(app: &AppHandle) -> u64 {
         if let (Some(mon), Ok(sz)) = (mon, o.outer_size()) {
             let m = mon.size();
             let x = mon.position().x + (m.width as i32 - sz.width as i32) / 2;
-            let y = mon.position().y + m.height as i32 - sz.height as i32 - 72;
+            // 72px fixos + 2% da altura do monitor: só o valor fixo encostava no
+            // dock em telas grandes
+            let margem = 72 + m.height as i32 * 2 / 100;
+            let y = mon.position().y + m.height as i32 - sz.height as i32 - margem;
             if let Err(e) = o.set_position(PhysicalPosition::new(x, y)) {
                 overlay_log(&format!("set_position falhou: {e}"));
             }
