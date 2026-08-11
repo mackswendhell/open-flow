@@ -159,11 +159,12 @@ export default function Overlay() {
       }
       clear();
       if (style.current === "classic") {
-        // pílula preta ocupando o canvas inteiro (o PAD vira margem interna).
+        // pílula cinza-escura translúcida — preto chapado ficava duro demais
+        // sobre o desktop. Borda nítida, sem blur.
         // Com as barras sobre o fundo escuro a sombra sob os traços some.
         ctx.shadowColor = "transparent";
         ctx.shadowBlur = 0;
-        ctx.fillStyle = "rgba(10, 10, 12, 0.92)";
+        ctx.fillStyle = "rgba(30, 30, 34, 0.78)";
         const pw = (CW + PAD * 2) * 0.95;
         const ph = (H + PAD * 2) * 0.81;
         ctx.beginPath();
