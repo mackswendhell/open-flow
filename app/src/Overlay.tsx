@@ -164,8 +164,10 @@ export default function Overlay() {
         ctx.shadowColor = "transparent";
         ctx.shadowBlur = 0;
         ctx.fillStyle = "rgba(10, 10, 12, 0.92)";
+        const pw = (CW + PAD * 2) * 0.95;
+        const ph = (H + PAD * 2) * 0.81;
         ctx.beginPath();
-        ctx.roundRect(CX - PAD, -PAD, CW + PAD * 2, H + PAD * 2, (H + PAD * 2) / 2);
+        ctx.roundRect(W / 2 - pw / 2, mid - ph / 2, pw, ph, ph / 2);
         ctx.fill();
       } else {
         // sem offset: deslocada para baixo com blur curto a sombra vira sublinhado.
