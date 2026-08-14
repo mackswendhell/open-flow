@@ -107,7 +107,8 @@ baixado automaticamente.
                      ⇅ fallback automático bidirecional
                      faster-whisper large-v3-turbo local (GPU, sidecar Python residente)
         texto bruto ↓
-[Reescrita]  Gemini Flash (free tier) + regras fixas + dicionário + perfil de escrita ativo
+[Reescrita]  Gemini Flash Lite (free tier, com fallback de modelo) + regras de edição
+             + dicionário + perfil de escrita ativo
         texto final ↓
 [Inserção]  clipboard + Ctrl+V/Cmd+V sintético (com backup/restauração do clipboard)
 ```
@@ -134,7 +135,7 @@ ali mesmo em vez de sumir no console. `Esc` durante a gravação descarta o dita
 | Decisão | Por quê |
 |---|---|
 | STT híbrido nuvem+local (Groq padrão, local fallback) | Groq free tier (~2.000/dia) libera a GPU e dá boot instantâneo; o local garante offline e privacidade total quando escolhido. Fallback automático nos dois sentidos. |
-| Reescrita no Gemini Flash free tier | Menor latência (~1s) e custo zero via API oficial. Sem chave, o app degrada para texto bruto corrigido pelo próprio Whisper. |
+| Reescrita no Gemini Flash Lite free tier | Menor latência (~1,4s medidos no `gemini-3.5-flash-lite`) e custo zero via API oficial. Sem chave, o app degrada para texto bruto corrigido pelo próprio Whisper. A classe *lite* é deliberada: editar transcrição é trabalho leve, e modelo maior custa espera e tende a reescrever mais do que se pede. |
 | Não usar conta ChatGPT Plus como "API" | Não existe ponte legítima Plus→API; automação do ChatGPT web viola ToS e quebra fácil. Caminhos oficiais mapeados (Codex CLI, Claude CLI) ficam como providers futuros. |
 | Tauri 2 em vez de Electron | Tray + overlay com ~11MB de exe e pouca RAM residente; UI em React/TS (stack já dominada). |
 | Hook de teclado de baixo nível próprio (WH_KEYBOARD_LL / CGEventTap) | Único jeito de detectar press-and-hold global (a API de hotkey comum não emite "soltou"). Suporta combos de modificadores e modo toggle. O rdev foi removido: chamava ToUnicode dentro do hook e consumia as dead keys (~/^) do teclado ABNT2. |
@@ -142,7 +143,9 @@ ali mesmo em vez de sumir no console. `Esc` durante a gravação descarta o dita
 | Port macOS no mesmo repositório (`platform/` + `#[cfg]`) | Uma base de código, sem fork. Equivalências: WH_KEYBOARD_LL→CGEventTap listen-only, Ctrl+V→Cmd+V com keycode cru. Atalho padrão do Mac é Ctrl+Option (Ctrl+Cmd foi descartado: Ctrl+Cmd+Q bloqueia a tela). |
 | Sem Keychain no macOS (chaves em texto no settings.json) | A autorização de leitura de uma entrada do Keychain é amarrada ao hash do binário: todo rebuild assinado pedia a senha do keychain `login`, e quando essa senha diverge da senha da conta o app fica trancado fora das próprias chaves. São chaves de API free tier num app local — o Windows segue no DPAPI, que é transparente. |
 | Cancelar ditado no `Esc`, não no Espaço | O hook é listen-only por decisão de projeto, então o sistema recebe a combinação junto: com o atalho segurado, `Ctrl+Option+Espaço` (Mac) e `Win+Espaço` (Windows) trocam a fonte de entrada e mudam o layout do teclado no meio do ditado. |
-| Prompt de reescrita com regras invioláveis + perfil | Regras fixas (manter só a versão final das autocorreções, não inventar fatos) valem sempre; o perfil só muda o estilo (Jurídico formal, E-mail, WhatsApp, Roteiro, Bruto). |
+| Prompt de reescrita em duas camadas (invioláveis + padrão conservador + perfil) | Chamar tudo de "inviolável" engessava o texto: as regras vinham antes do estilo e nenhum perfil conseguia afrouxá-las, então repetição intencional virava erro e a fala voltava mais formal do que saiu. Hoje só três coisas são absolutas (não inventar, não resumir, não omitir); a edição é conservadora por padrão — preserva palavras, trata repetição como ênfase, descarta apenas retratação explícita — e o `Estilo:` do perfil, que vem por último, pode pedir mais liberdade (o de e-mail reescreve e quebra em linhas). |
+| Estrutura decidida pela fala, não pelo perfil | Ditar uma resposta e receber um bloco único é ruim, mas obrigar tópicos é pior. A regra pede parágrafos quando o assunto muda e numeração quando o falante enumera — e manda deixar em paz quando a fala foi um bloco só. Colocar isso no perfil exigiria trocar de perfil a cada ditado; na regra global vale para todos. |
+| Modelo do Gemini com fallback automático | O acesso a modelos varia por conta e projeto, então o modelo mais rápido para um usuário pode não existir para outro. O app tenta o configurado e cai para o `gemini-3.1-flash-lite` em 404/503, travando a escolha após o primeiro fallback para não pagar uma chamada perdida por ditado. |
 | Código fora do OneDrive (`C:\dev\open-flow`) | `target/` do Rust + `node_modules` em pasta sincronizada = builds lentos, conflitos de sync e locks de linker. |
 
 ## Rodando do zero
