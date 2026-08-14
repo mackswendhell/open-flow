@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::io::Cursor;
 use std::io::Write as _;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{channel, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -15,10 +15,12 @@ use tauri::{AppHandle, Emitter, Manager, PhysicalPosition};
 mod platform;
 
 const RULES: &str = "Você é um editor de ditado. Receberá a transcrição literal de uma fala em pt-BR.\n\
-Regras invioláveis:\n\
-1. Quando o falante se corrige (\"não, melhor...\", \"deixa eu corrigir...\", \"quer dizer...\"), mantenha APENAS a versão final e descarte a descartada.\n\
-2. Remova hesitações, muletas (\"é...\", \"tipo\", \"então...\") e repetições.\n\
-3. Corrija concordância e pontuação. NÃO adicione fatos, NÃO resuma, NÃO omita conteúdo.\n";
+Invioláveis: NÃO adicione fatos, NÃO resuma, NÃO omita conteúdo.\n\
+Edição — padrão conservador; o Estilo no fim pode pedir mais liberdade:\n\
+1. Preserve as palavras do falante. Não troque expressões por sinônimos mais formais, não reordene nem reescreva frases que já se entendem. Corrija apenas ortografia, concordância e pontuação.\n\
+2. Repetição de palavra ou frase é ênfase do falante: MANTENHA. Remova só hesitações e falsos inícios (\"é...\", \"hum\", \"a-a-a\").\n\
+3. Descarte a versão anterior apenas quando o falante se retrata de forma explícita (\"não, na verdade é X\", \"me corrigindo, são 30\"). Conectores como \"quer dizer\", \"tipo\" e \"então\" sozinhos NÃO são correção.\n\
+4. Estrutura: siga o que a fala pede. Quebre em parágrafos quando o assunto muda; numere quando o falante enumera de fato. Se a fala for um bloco só, entregue um bloco só. Não force formato nem crie tópicos por conta própria.\n";
 
 #[derive(Serialize, Deserialize, Clone, Default)]
 struct Profile {
@@ -61,9 +63,9 @@ struct Settings {
 fn default_profiles() -> Vec<Profile> {
     let p = |name: &str, style: &str| Profile { name: name.into(), style: style.into() };
     vec![
-        p("Bruto corrigido", "texto natural corrigido, mantendo o tom do falante."),
+        p("Bruto corrigido", "coringa do dia a dia (resposta de conversa, WhatsApp, prompt para IA): texto natural com o tom e as palavras do falante preservados."),
         p("Jurídico formal", "certidão ou comunicação de oficial de justiça, linguagem jurídica formal brasileira (ex.: \"Certifico e dou fé que...\", \"genitor\", \"Ante o exposto, devolvo o presente mandado\")."),
-        p("E-mail profissional", "e-mail profissional claro e cordial, com saudação e fecho quando fizer sentido."),
+        p("E-mail profissional", "e-mail profissional claro e cordial, com saudação e fecho quando fizer sentido. Aqui pode reescrever para deixar formal: cada ideia em sua própria linha, separadas por linha em branco, no padrão corporativo."),
         p("WhatsApp curto", "mensagem curta e informal de WhatsApp, direta, sem formalidade excessiva."),
         p("Roteiro de vídeo", "roteiro falado para vídeo do YouTube: frases curtas, ritmo de fala natural, tom de conversa."),
     ]
@@ -116,7 +118,7 @@ impl Default for Settings {
             groq_model: "whisper-large-v3-turbo".into(),
             speech_lang: "pt".into(),
             output_lang: "same".into(),
-            gemini_model: "gemini-3.1-flash-lite".into(),
+            gemini_model: "gemini-3.5-flash-lite".into(),
             gemini_api_key: None,
             wave_style: "tech".into(),
             theme: "dark".into(),
@@ -481,7 +483,7 @@ fn build_prompt(s: &Settings) -> String {
     let mut p = RULES.to_string();
     let dict: Vec<&str> = s.dictionary.iter().map(|t| t.trim()).filter(|t| !t.is_empty()).collect();
     if !dict.is_empty() {
-        p.push_str(&format!("4. Grafias obrigatórias quando essas palavras aparecerem: {}.\n", dict.join(", ")));
+        p.push_str(&format!("5. Grafias obrigatórias quando essas palavras aparecerem: {}.\n", dict.join(", ")));
     }
     p.push_str("Responda SOMENTE com o texto final, sem comentários.\n");
     if s.output_lang != "same" && s.output_lang != s.speech_lang {
@@ -499,6 +501,57 @@ fn build_prompt(s: &Settings) -> String {
     p
 }
 
+/// Modelo de reserva: o acesso a modelos varia por conta/projeto, então a chave
+/// de outro usuário pode não ter o modelo configurado (404) ou vê-lo saturado
+/// (503). Cair aqui é melhor que devolver a transcrição crua.
+const FALLBACK_MODEL: &str = "gemini-3.1-flash-lite";
+/// Travado depois do primeiro 404/503: sem isso, uma conta sem o modelo
+/// preferido pagaria uma chamada perdida em TODO ditado.
+static USE_FALLBACK: AtomicBool = AtomicBool::new(false);
+
+fn modelo_efetivo(configurado: &str) -> &str {
+    if USE_FALLBACK.load(Ordering::Relaxed) {
+        FALLBACK_MODEL
+    } else {
+        configurado
+    }
+}
+
+/// Err traz o status HTTP (0 = falha de rede) para separar "esse modelo não
+/// serve para esta chave" de "a internet caiu".
+fn call_gemini(model: &str, key: &str, prompt: &str) -> Result<String, (u16, String)> {
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|e| (0, e.to_string()))?;
+    let url = format!(
+        "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}"
+    );
+    let body = serde_json::json!({
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"temperature": 0.2}
+    });
+    let resp = client
+        .post(url)
+        .json(&body)
+        .send()
+        .map_err(|e| (0, format!("Gemini: {e}")))?;
+    let status = resp.status().as_u16();
+    if !resp.status().is_success() {
+        return Err((status, format!("Gemini {model}: HTTP {status}")));
+    }
+    let v: serde_json::Value = resp.json().map_err(|e| (status, e.to_string()))?;
+    let parts = &v["candidates"][0]["content"]["parts"];
+    let text = parts
+        .as_array()
+        .map(|a| a.iter().filter_map(|p| p["text"].as_str()).collect::<Vec<_>>().join(""))
+        .unwrap_or_default();
+    if text.trim().is_empty() {
+        return Err((status, format!("resposta vazia do Gemini: {v}")));
+    }
+    Ok(text.trim().to_string())
+}
+
 fn rewrite(raw: &str, s: &Settings) -> Result<String, String> {
     let key = s
         .gemini_api_key
@@ -506,34 +559,20 @@ fn rewrite(raw: &str, s: &Settings) -> Result<String, String> {
         .filter(|k| !k.is_empty())
         .or_else(|| std::env::var("GEMINI_API_KEY").ok())
         .ok_or("chave do Gemini ausente (settings.json ou GEMINI_API_KEY)")?;
-    let client = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(30))
-        .build()
-        .map_err(|e| e.to_string())?;
-    let url = format!(
-        "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
-        s.gemini_model, key
-    );
-    let body = serde_json::json!({
-        "contents": [{"parts": [{"text": format!("{}{}", build_prompt(s), raw)}]}],
-        "generationConfig": {"temperature": 0.2}
-    });
-    let v: serde_json::Value = client
-        .post(url)
-        .json(&body)
-        .send()
-        .map_err(|e| format!("Gemini: {e}"))?
-        .json()
-        .map_err(|e| e.to_string())?;
-    let parts = &v["candidates"][0]["content"]["parts"];
-    let text = parts
-        .as_array()
-        .map(|a| a.iter().filter_map(|p| p["text"].as_str()).collect::<Vec<_>>().join(""))
-        .unwrap_or_default();
-    if text.trim().is_empty() {
-        return Err(format!("resposta vazia do Gemini: {v}"));
+    let prompt = format!("{}{}", build_prompt(s), raw);
+    let escolhido = modelo_efetivo(&s.gemini_model);
+    match call_gemini(escolhido, &key, &prompt) {
+        Ok(t) => Ok(t),
+        // só o modelo indisponível justifica a segunda chamada: erro de rede
+        // erraria de novo e timeout de 30s viraria 60s de espera
+        Err((code, e)) if (code == 404 || code == 503) && escolhido != FALLBACK_MODEL => {
+            eprintln!("[gemini] {escolhido} indisponível ({e}); usando {FALLBACK_MODEL}");
+            let t = call_gemini(FALLBACK_MODEL, &key, &prompt).map_err(|(_, e2)| e2)?;
+            USE_FALLBACK.store(true, Ordering::Relaxed);
+            Ok(t)
+        }
+        Err((_, e)) => Err(e),
     }
-    Ok(text.trim().to_string())
 }
 
 fn apply_snippets(text: &str, snippets: &[Snippet]) -> String {
@@ -1079,6 +1118,15 @@ fn rebuild_tray_menu(app: &AppHandle, s: &Settings) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fallback_so_troca_o_modelo_depois_de_travado() {
+        USE_FALLBACK.store(false, Ordering::Relaxed);
+        assert_eq!(modelo_efetivo("gemini-3.5-flash-lite"), "gemini-3.5-flash-lite");
+        USE_FALLBACK.store(true, Ordering::Relaxed);
+        assert_eq!(modelo_efetivo("gemini-3.5-flash-lite"), FALLBACK_MODEL);
+        USE_FALLBACK.store(false, Ordering::Relaxed);
+    }
 
     fn hook(mode: &str, cancel: &str) -> (HookState, std::sync::mpsc::Receiver<Cmd>) {
         let mut s = Settings::default();

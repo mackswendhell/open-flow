@@ -60,6 +60,23 @@ fn key_down_now(code: u32) -> bool {
     unsafe { CGEventSourceKeyState(HID_STATE, code as u16) }
 }
 
+/// Estado do modificador lido do PRÓPRIO evento FlagsChanged. Perguntar ao
+/// sistema (CGEventSourceKeyState) corre com a entrega do evento: na soltura a
+/// consulta ainda respondia "pressionado", a tecla nunca saía de `pressed` e o
+/// modo hold gravava para sempre (só o Esc parava). None = não é modificador
+/// com flag própria (CapsLock, cuja flag é o lock e não a tecla).
+fn modifier_down(code: u32, flags: core_graphics::event::CGEventFlags) -> Option<bool> {
+    use core_graphics::event::CGEventFlags as F;
+    let mask = match code {
+        59 | 62 => F::CGEventFlagControl,
+        58 | 61 => F::CGEventFlagAlternate,
+        55 | 54 => F::CGEventFlagCommand,
+        56 | 60 => F::CGEventFlagShift,
+        _ => return None,
+    };
+    Some(flags.contains(mask))
+}
+
 static TAP_PORT: AtomicPtr<std::ffi::c_void> = AtomicPtr::new(std::ptr::null_mut());
 
 // --- Hotkey: CGEventTap em modo listen-only. Não consome eventos — a classe de
@@ -109,8 +126,9 @@ pub fn spawn_hotkey_listener(shared: Arc<Shared>, tx: Sender<Cmd>) {
                             let down = match etype {
                                 CGEventType::KeyDown => true,
                                 CGEventType::KeyUp => false,
-                                // FlagsChanged não diz down/up: consulta o estado físico
-                                _ => key_down_now(code),
+                                // FlagsChanged não diz down/up: lê a flag do evento
+                                _ => modifier_down(code, event.get_flags())
+                                    .unwrap_or_else(|| key_down_now(code)),
                             };
                             handle_key(&mut st.borrow_mut(), code, down);
                         }
@@ -189,5 +207,24 @@ pub fn spawn_sidecar(s: &Settings) -> Option<std::process::Child> {
             eprintln!("[sidecar] falha ao iniciar ({e}) — inicie manualmente: {} {}", s.python, s.sidecar);
             None
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::modifier_down;
+    use core_graphics::event::CGEventFlags as F;
+
+    #[test]
+    fn soltura_de_modificador_vira_down_false() {
+        let ambos = F::CGEventFlagControl | F::CGEventFlagAlternate;
+        assert_eq!(modifier_down(59, ambos), Some(true));
+        assert_eq!(modifier_down(58, ambos), Some(true));
+        // soltou o Control, Option segue pressionado: é aqui que o hold travava
+        assert_eq!(modifier_down(59, F::CGEventFlagAlternate), Some(false));
+        assert_eq!(modifier_down(58, F::CGEventFlagAlternate), Some(true));
+        assert_eq!(modifier_down(62, F::empty()), Some(false));
+        // CapsLock não tem flag de tecla: cai no fallback
+        assert_eq!(modifier_down(57, F::empty()), None);
     }
 }

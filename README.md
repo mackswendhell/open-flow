@@ -38,7 +38,9 @@ de crédito) e do instalador.
 *macOS (Apple Silicon):*
 
 - Vá em [Releases](../../releases) e baixe o `OpenFlow_x.y.z_aarch64.dmg` mais recente (as v0.1.8
-  e v0.1.9 corrigem bugs só do Windows e não têm build do Mac; da v0.1.10 em diante o DMG voltou)
+  e v0.1.9 corrigem bugs só do Windows e não têm build do Mac; da v0.1.10 em diante o DMG voltou).
+  A v0.1.13 é o inverso: corrige o press-and-hold do Mac e refina o prompt, e saiu só com DMG —
+  no Windows, o instalador mais recente segue sendo o da v0.1.11
 - Abra o DMG e arraste o Open Flow para **Aplicativos**
 - Na primeira abertura, o Gatekeeper vai bloquear (app sem assinatura paga da Apple): vá em
   **Ajustes → Privacidade e Segurança** e clique em **"Abrir Assim Mesmo"**
@@ -196,6 +198,23 @@ Autostart: atalho para o exe em `shell:startup`.
   tecla, "Copiar último ditado" na bandeja, caminhos do sidecar editáveis na UI com o
   Diagnóstico distinguindo "não configurado" de "descarregado", e busca do Histórico com espera.
   O Keychain do macOS foi removido na mesma leva (ver decisões).
+- **Edição sutil (v0.1.13)**: o prompt corrigia demais. Repetir uma palavra de propósito era
+  tratado como erro, "quer dizer" e "tipo" contavam como autocorreção e o texto voltava
+  reescrito num registro mais formal que o falado. A causa era estrutural: as regras se
+  chamavam "invioláveis" e vinham antes do estilo do perfil, então nenhum perfil conseguia
+  afrouxá-las. O prompt passou a ter duas camadas — invioláveis de verdade (não inventar, não
+  resumir, não omitir) e um padrão de edição conservador que o `Estilo:` do perfil pode
+  relaxar. Repetição virou ênfase a preservar, descarte só vale em retratação explícita
+  ("não, na verdade é X") e a estrutura passou a seguir a fala: parágrafos quando o assunto
+  muda, numeração quando o falante enumera, bloco único quando foi um bloco só.
+- **O tempo estava no Gemini (v0.1.13)**: o histórico em JSONL já cronometrava as duas etapas, e
+  os 665 ditados acumulados responderam sozinhos — 63% da espera era do Gemini, com custo fixo
+  de 1,89s contra 0,28s por 100 caracteres gerados. Ou seja: quase tudo era latência de modelo,
+  não volume de texto. Medir os modelos disponíveis para a mesma chave mostrou o
+  `gemini-3.5-flash-lite` com 1,44s de média contra 5,54s do `3.1-flash-lite` — a mesma classe
+  de modelo, uma geração à frente, quase 4x mais rápido. Como o acesso a modelos varia por
+  conta e projeto, o app tenta o modelo configurado e cai para o `3.1-flash-lite` em 404 ou 503,
+  travando a escolha depois do primeiro fallback para não pagar uma chamada perdida por ditado.
 
 Bugs memoráveis (e suas lições, gravadas como proteções no código):
 - Janela extra do Tauri v2 fora de `capabilities/default.json` → eventos negados em silêncio
@@ -223,6 +242,14 @@ Bugs memoráveis (e suas lições, gravadas como proteções no código):
   Esconder e reexibir a janela é o caminho defeituoso do WebView2; a janela passou a nascer
   visível e nunca mais ser escondida (`overlay_hide` só emite evento), com o React apagando o
   conteúdo. No macOS o mesmo ciclo sempre funcionou, e foi por isso que o bug era só do Windows.
+- No Mac o modo press-and-hold parou de soltar: o ditado começava no atalho e só o Esc encerrava.
+  Modificador não emite `KeyUp` no macOS — só `FlagsChanged`, que não diz por si se foi aperto ou
+  soltura —, e o código resolvia isso perguntando o estado físico da tecla ao sistema
+  (`CGEventSourceKeyState`). Essa consulta corre com a entrega do evento: na soltura ela ainda
+  respondia "pressionado", a tecla nunca saía do conjunto e o Stop jamais disparava. O estado
+  passou a ser lido da flag do próprio evento, que é determinística e chega junto com ele. O bug
+  existia desde o port, mas só apareceu quando o timing mudou — binário recém-instalado é novo
+  para o sistema.
 - A janela de configurações abria sozinha no boot: duas entradas de inicialização (a chave do
   registro do `tauri-plugin-autostart` e um atalho manual em `shell:startup`) subiam duas
   instâncias, e a segunda caía no callback do `single_instance`, cujo trabalho é justamente
