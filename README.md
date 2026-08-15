@@ -216,6 +216,16 @@ Autostart: atalho para o exe em `shell:startup`.
   de modelo, uma geração à frente, quase 4x mais rápido. Como o acesso a modelos varia por
   conta e projeto, o app tenta o modelo configurado e cai para o `3.1-flash-lite` em 404 ou 503,
   travando a escolha depois do primeiro fallback para não pagar uma chamada perdida por ditado.
+- **Estrutura deixou de ser adivinhada (v0.1.14)**: a regra de estrutura da v0.1.13 pedia
+  julgamento ("quebre quando o assunto muda") e vinha logo depois de duas travas conservadoras,
+  então em fala curta as travas venciam: cinco ditados de teste com "primeiro… segundo…
+  terceiro" dito em voz alta voltaram como bloco corrido. A regra passou a tratar marca falada
+  como instrução, não como licença para reformatar, e ganhou um teto mecânico — acima de ~400
+  caracteres o texto nunca sai em bloco único, com parágrafos de no máximo 4 frases. O teto foi
+  necessário porque a versão só com "quebre onde o foco muda" falhava justamente no caso mais
+  longo (943 caracteres sobre um assunto só): sem critério objetivo, o modelo conclui que não
+  há virada e devolve o bloco. Validação nos ditados reais já gravados no `history.jsonl`, sem
+  precisar ditar de novo — o histórico serve de suíte de regressão para prompt.
 
 Bugs memoráveis (e suas lições, gravadas como proteções no código):
 - Janela extra do Tauri v2 fora de `capabilities/default.json` → eventos negados em silêncio
@@ -235,6 +245,13 @@ Bugs memoráveis (e suas lições, gravadas como proteções no código):
   segurado a combinação vira um atalho do sistema. Passou a ser `Esc`.
 - O normalizador da onda do overlay não pode ser zerado a cada gravação: sem calibração
   anterior o ruído de fundo vira o máximo da escala e as ondas abrem sozinhas no silêncio.
+- "Legenda Adriana Zanotto" aparecia no fim do texto em ~3% dos ditados: o Whisper foi treinado
+  em legendas e assina a transcrição quando o áudio termina em silêncio. Não é corrigível no
+  prompt — a primeira regra manda não omitir conteúdo, então o Gemini preserva a assinatura
+  fielmente. A limpeza virou código na saída do STT (`strip_credit`), cortando só a cauda depois
+  do último fim de frase: "legenda" no meio da fala é palavra legítima do falante e não pode
+  sumir. O ponto de "Amara.org" quase quebrou a regra ao passar por fim de frase — fim de frase
+  exige pontuação seguida de espaço.
 - No Windows o overlay sumia depois de um tempo de uso e só voltava reiniciando o app, com o
   ditado funcionando normalmente. Duas tentativas erraram o alvo (reafirmar `always_on_top`,
   depois reiniciar o loop de `requestAnimationFrame`) porque a hipótese era sempre "a janela

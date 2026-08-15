@@ -20,7 +20,8 @@ Edição — padrão conservador; o Estilo no fim pode pedir mais liberdade:\n\
 1. Preserve as palavras do falante. Não troque expressões por sinônimos mais formais, não reordene nem reescreva frases que já se entendem. Corrija apenas ortografia, concordância e pontuação.\n\
 2. Repetição de palavra ou frase é ênfase do falante: MANTENHA. Remova só hesitações e falsos inícios (\"é...\", \"hum\", \"a-a-a\").\n\
 3. Descarte a versão anterior apenas quando o falante se retrata de forma explícita (\"não, na verdade é X\", \"me corrigindo, são 30\"). Conectores como \"quer dizer\", \"tipo\" e \"então\" sozinhos NÃO são correção.\n\
-4. Estrutura: siga o que a fala pede. Quebre em parágrafos quando o assunto muda; numere quando o falante enumera de fato. Se a fala for um bloco só, entregue um bloco só. Não force formato nem crie tópicos por conta própria.\n";
+4. Estrutura: quando o falante marca a virada em voz alta, obedeça — é instrução, não licença para reformatar. \"outra coisa\", \"outro assunto\", \"mudando de assunto\", \"agora\" abrindo tema novo: parágrafo novo (linha em branco). \"primeiro/segundo/terceiro\", \"três coisas que eu queria\": uma linha por item, numerada. Isso vale igual em fala curta. Sem marca falada, entregue um bloco só: não force formato nem crie tópicos por conta própria.\n\
+5. Fala longa (acima de ~400 caracteres) nunca sai em bloco único, mesmo que trate de um assunto só: divida em parágrafos de no máximo 4 frases, cortando no ponto final mais próximo da virada de foco.\n";
 
 #[derive(Serialize, Deserialize, Clone, Default)]
 struct Profile {
@@ -349,7 +350,11 @@ fn is_hallucination(text: &str, audio_secs: f32) -> bool {
         .chars()
         .filter(|c| c.is_alphanumeric() || c.is_whitespace())
         .collect();
-    matches!(norm.trim(), "e aí" | "eaí" | "obrigado" | "obrigada" | "tchau" | "valeu" | "thank you")
+    let norm = norm.trim();
+    // sem frase anterior para servir de âncora, a assinatura de legenda vem
+    // sozinha e o strip_credit não a alcança (histórico: 0,8s de áudio)
+    norm.starts_with("legenda")
+        || matches!(norm, "e aí" | "eaí" | "obrigado" | "obrigada" | "tchau" | "valeu" | "thank you")
 }
 
 fn wav_bytes(samples: &[f32], rate: u32) -> Vec<u8> {
@@ -438,7 +443,45 @@ fn transcribe_groq(wav: Vec<u8>, s: &Settings) -> Result<String, String> {
     Ok(v["text"].as_str().unwrap_or("").trim().to_string())
 }
 
+/// O Whisper foi treinado em legendas e às vezes assina o fim da transcrição:
+/// "Legenda Adriana Zanotto", "Legendas pela comunidade Amara.org". Não dá para
+/// resolver no prompt — as regras mandam NÃO omitir conteúdo, então o Gemini
+/// preserva a assinatura fielmente e ela cai no campo do usuário. 8 dos 282
+/// ditados do histórico vieram assim, sempre coladas depois da última frase.
+///
+/// Só corta a cauda depois do último ponto final: "legenda" no meio da fala é
+/// palavra legítima do falante (aparece no histórico em "com título, legenda,
+/// nome das variáveis") e não pode sumir.
+fn strip_credit(text: &str) -> &str {
+    const MARCAS: [&str; 3] = ["legenda", "legendado", "subtitle"];
+    let t = text.trim_end();
+    let corpo = t.trim_end_matches(['.', '!', '?', ' ']);
+    // fim de frase é pontuação seguida de espaço: o ponto de "Amara.org" não conta
+    let Some(i) = corpo
+        .char_indices()
+        .filter(|(j, c)| {
+            matches!(c, '.' | '!' | '?' | '\n')
+                && corpo[j + c.len_utf8()..].chars().next().map_or(true, char::is_whitespace)
+        })
+        .map(|(j, _)| j)
+        .next_back()
+    else {
+        return t;
+    };
+    let cauda = corpo[i + 1..].trim().to_lowercase();
+    let curta = cauda.split_whitespace().count() <= 5;
+    if curta && (MARCAS.iter().any(|m| cauda.starts_with(m)) || cauda.contains("amara.org")) {
+        return t[..=i].trim_end();
+    }
+    t
+}
+
 fn run_stt(wav: Vec<u8>, shared: &Shared, s: &Settings) -> Result<String, String> {
+    // os dois provedores rodam Whisper, então os dois assinam legenda
+    stt_provider(wav, shared, s).map(|t| strip_credit(&t).to_string())
+}
+
+fn stt_provider(wav: Vec<u8>, shared: &Shared, s: &Settings) -> Result<String, String> {
     if s.stt_provider == "groq" && s.groq_ready() {
         match transcribe_groq(wav.clone(), s) {
             Ok(t) => {
@@ -483,7 +526,7 @@ fn build_prompt(s: &Settings) -> String {
     let mut p = RULES.to_string();
     let dict: Vec<&str> = s.dictionary.iter().map(|t| t.trim()).filter(|t| !t.is_empty()).collect();
     if !dict.is_empty() {
-        p.push_str(&format!("5. Grafias obrigatórias quando essas palavras aparecerem: {}.\n", dict.join(", ")));
+        p.push_str(&format!("6. Grafias obrigatórias quando essas palavras aparecerem: {}.\n", dict.join(", ")));
     }
     p.push_str("Responda SOMENTE com o texto final, sem comentários.\n");
     if s.output_lang != "same" && s.output_lang != s.speech_lang {
@@ -1118,6 +1161,45 @@ fn rebuild_tray_menu(app: &AppHandle, s: &Settings) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// casos reais do history.jsonl: o Whisper assina o fim da transcrição
+    #[test]
+    fn assinatura_de_legenda_nao_chega_ao_texto_final() {
+        for (entrada, esperado) in [
+            (
+                "Mas isso será em um segundo momento. Legenda Adriana Zanotto",
+                "Mas isso será em um segundo momento.",
+            ),
+            (
+                "Fica bom para você? Legenda Adriana Zanotto",
+                "Fica bom para você?",
+            ),
+            (
+                "Tem texto. Legenda: Adriana Zanotto.",
+                "Tem texto.",
+            ),
+            (
+                "Foi ótimo. Legendas pela comunidade Amara.org",
+                "Foi ótimo.",
+            ),
+            // "legenda" dita pelo falante no meio da frase: preservar
+            (
+                "Quero as tabelas com título, legenda, nome das variáveis.",
+                "Quero as tabelas com título, legenda, nome das variáveis.",
+            ),
+            // frase final curta que só começa parecido: preservar
+            (
+                "Terminei o vídeo. Legendei tudo ontem.",
+                "Terminei o vídeo. Legendei tudo ontem.",
+            ),
+            ("Sem assinatura nenhuma aqui.", "Sem assinatura nenhuma aqui."),
+        ] {
+            assert_eq!(strip_credit(entrada), esperado, "entrada: {entrada:?}");
+        }
+        // sozinha, sem frase anterior, cai no guarda de alucinação
+        assert!(is_hallucination("Legenda Adriana Zanotto", 0.8));
+        assert!(!is_hallucination("Legenda Adriana Zanotto", 30.0));
+    }
 
     #[test]
     fn fallback_so_troca_o_modelo_depois_de_travado() {

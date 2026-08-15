@@ -1,6 +1,6 @@
 [package]
 name = "app"
-version = "0.1.13"
+version = "0.1.14"
 description = "Open Flow — ditado inteligente para Windows e macOS"
 authors = ["Macks Wendhell"]
 edition = "2021"
