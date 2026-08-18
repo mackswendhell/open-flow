@@ -37,8 +37,9 @@ de crédito) e do instalador.
 
 *macOS (Apple Silicon):*
 
-- Vá em [Releases](../../releases) e baixe o `OpenFlow_x.y.z_aarch64.dmg` mais recente (as v0.1.8
-  e v0.1.9 corrigem bugs só do Windows e não têm build do Mac; da v0.1.10 em diante o DMG voltou)
+- Vá em [Releases](../../releases/latest) e baixe o `OpenFlow_x.y.z_aarch64.dmg` mais recente
+  (as v0.1.8 e v0.1.9 corrigem bugs só do Windows e não têm build do Mac; da v0.1.10 em diante
+  o DMG voltou)
 - Abra o DMG e arraste o Open Flow para **Aplicativos**
 - Na primeira abertura, o Gatekeeper vai bloquear (app sem assinatura paga da Apple): vá em
   **Ajustes → Privacidade e Segurança** e clique em **"Abrir Assim Mesmo"**
