@@ -16,6 +16,10 @@ spike/
 CLAUDE.md
 .claude/
 
+# resultados do benchmark de reescrita (bench/ e ferramenta, out/ e descartavel)
+bench/out/
+__pycache__/
+
 # grafo de conhecimento gerado localmente (graphify)
 graphify-out/
 

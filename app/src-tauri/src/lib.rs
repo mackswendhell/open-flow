@@ -546,11 +546,26 @@ fn build_prompt(s: &Settings) -> String {
 
 /// Modelo de reserva: o acesso a modelos varia por conta/projeto, então a chave
 /// de outro usuário pode não ter o modelo configurado (404) ou vê-lo saturado
-/// (503). Cair aqui é melhor que devolver a transcrição crua.
-const FALLBACK_MODEL: &str = "gemini-3.1-flash-lite";
-/// Travado depois do primeiro 404/503: sem isso, uma conta sem o modelo
-/// preferido pagaria uma chamada perdida em TODO ditado.
+/// (503/429). Cair aqui é melhor que devolver a transcrição crua — mas SÓ se o
+/// reserva for confiável, e o antigo (`gemini-3.1-flash-lite`) não era: medido,
+/// ele pendura 25% das chamadas até o timeout (3 de 12), o que transformou o
+/// rebaixamento numa sessão inteira de ditados travando. O `-latest` fez 12/12
+/// a 1,39s de mediana. Ele é um alias, então o modelo por baixo pode mudar sem
+/// aviso — para um RESERVA isso é troca boa: nunca vira 404 quando o Google
+/// aposenta uma versão, que é justamente o caso que traz alguém até aqui.
+const FALLBACK_MODEL: &str = "gemini-flash-lite-latest";
+/// Travado só depois de um 404: sem isso, uma conta sem o modelo preferido
+/// pagaria uma chamada perdida em TODO ditado. 429 e 503 NÃO travam — são
+/// congestionamento do minuto, e rebaixar a sessão inteira por causa de um pico
+/// custaria caro (o 3.1-flash-lite mede 5,5s contra 1,4s do 3.5).
 static USE_FALLBACK: AtomicBool = AtomicBool::new(false);
+
+/// Só o 404 é veredito sobre o modelo ("essa chave não tem esse modelo"). 429 e
+/// 503 falam do minuto, não do modelo — travar a sessão por causa deles trocaria
+/// um pico de segundos por uma sessão inteira no modelo lento.
+fn erro_e_definitivo(code: u16) -> bool {
+    code == 404
+}
 
 fn modelo_efetivo(configurado: &str) -> &str {
     if USE_FALLBACK.load(Ordering::Relaxed) {
@@ -560,11 +575,21 @@ fn modelo_efetivo(configurado: &str) -> &str {
     }
 }
 
-/// Err traz o status HTTP (0 = falha de rede) para separar "esse modelo não
-/// serve para esta chave" de "a internet caiu".
+/// Teto por tentativa. O free tier trava requisições isoladas sem relação com o
+/// tamanho da entrada — medido em ditados reais do history: 18,1s para 43
+/// caracteres no mesmo lote em que 1729 caracteres saíram em 1,8s. E a travada
+/// não gruda: refeita na hora, a chamada volta ao tempo normal (24/24 num teste
+/// que cortava tudo acima de 2s). Por isso cortar cedo ganha do teto largo —
+/// medido, o corte em 2s deu máximo de 4,1s contra 10,0s do corte em 8s.
+/// 4s é o meio: acima do p95 real (~3,3s), então quase nenhuma chamada boa
+/// morre, e ainda mata o estol antes de o ditado virar prejuízo.
+const REWRITE_TIMEOUT: Duration = Duration::from_secs(4);
+
+/// Err traz o status HTTP (0 = falha de rede, 408 = estourou o teto) para separar
+/// "esse modelo não serve para esta chave" de "a internet caiu".
 fn call_gemini(model: &str, key: &str, prompt: &str) -> Result<String, (u16, String)> {
     let client = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(30))
+        .timeout(REWRITE_TIMEOUT)
         .build()
         .map_err(|e| (0, e.to_string()))?;
     let url = format!(
@@ -578,7 +603,7 @@ fn call_gemini(model: &str, key: &str, prompt: &str) -> Result<String, (u16, Str
         .post(url)
         .json(&body)
         .send()
-        .map_err(|e| (0, format!("Gemini: {e}")))?;
+        .map_err(|e| (if e.is_timeout() { 408 } else { 0 }, format!("Gemini: {e}")))?;
     let status = resp.status().as_u16();
     if !resp.status().is_success() {
         return Err((status, format!("Gemini {model}: HTTP {status}")));
@@ -606,12 +631,23 @@ fn rewrite(raw: &str, s: &Settings) -> Result<String, String> {
     let escolhido = modelo_efetivo(&s.gemini_model);
     match call_gemini(escolhido, &key, &prompt) {
         Ok(t) => Ok(t),
-        // só o modelo indisponível justifica a segunda chamada: erro de rede
-        // erraria de novo e timeout de 30s viraria 60s de espera
-        Err((code, e)) if (code == 404 || code == 503) && escolhido != FALLBACK_MODEL => {
+        // Travada isolada do free tier: a segunda tentativa pega outra fila e
+        // costuma responder no tempo normal. Só cabe porque o teto caiu para 8s
+        // — com os 30s antigos a segunda chamada chegaria depois de o usuário já
+        // ter desistido. Uma tentativa só: duas somariam o dobro do teto.
+        Err((408, e)) => {
+            eprintln!("[gemini] estourou {}s ({e}); segunda tentativa", REWRITE_TIMEOUT.as_secs());
+            call_gemini(escolhido, &key, &prompt).map_err(|(_, e2)| e2)
+        }
+        // Modelo fora do ar (404/503) ou cota do minuto estourada (429): o
+        // fallback é outro modelo, logo outro balde de cota, então responde na
+        // hora. Erro de rede não entra: erraria de novo.
+        Err((code, e)) if (code == 404 || code == 429 || code == 503) && escolhido != FALLBACK_MODEL => {
             eprintln!("[gemini] {escolhido} indisponível ({e}); usando {FALLBACK_MODEL}");
             let t = call_gemini(FALLBACK_MODEL, &key, &prompt).map_err(|(_, e2)| e2)?;
-            USE_FALLBACK.store(true, Ordering::Relaxed);
+            if erro_e_definitivo(code) {
+                USE_FALLBACK.store(true, Ordering::Relaxed);
+            }
             Ok(t)
         }
         Err((_, e)) => Err(e),
@@ -1208,6 +1244,16 @@ mod tests {
         USE_FALLBACK.store(true, Ordering::Relaxed);
         assert_eq!(modelo_efetivo("gemini-3.5-flash-lite"), FALLBACK_MODEL);
         USE_FALLBACK.store(false, Ordering::Relaxed);
+    }
+
+    #[test]
+    fn so_404_rebaixa_a_sessao_inteira() {
+        assert!(erro_e_definitivo(404), "404 = a chave não tem o modelo, é definitivo");
+        // 408 (teto estourado), 429 (cota do minuto), 503 (saturado) e 0 (rede)
+        // passam; travar em qualquer um deles rebaixaria a sessão por um pico
+        for transitorio in [0u16, 408, 429, 503, 500] {
+            assert!(!erro_e_definitivo(transitorio), "{transitorio} não pode travar a sessão");
+        }
     }
 
     fn hook(mode: &str, cancel: &str) -> (HookState, std::sync::mpsc::Receiver<Cmd>) {
