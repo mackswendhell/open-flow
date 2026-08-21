@@ -632,9 +632,10 @@ fn rewrite(raw: &str, s: &Settings) -> Result<String, String> {
     match call_gemini(escolhido, &key, &prompt) {
         Ok(t) => Ok(t),
         // Travada isolada do free tier: a segunda tentativa pega outra fila e
-        // costuma responder no tempo normal. Só cabe porque o teto caiu para 8s
-        // — com os 30s antigos a segunda chamada chegaria depois de o usuário já
-        // ter desistido. Uma tentativa só: duas somariam o dobro do teto.
+        // costuma responder no tempo normal. Só cabe porque o teto caiu para
+        // REWRITE_TIMEOUT — com os 30s antigos a segunda chamada chegaria depois
+        // de o usuário já ter desistido. Uma tentativa só: duas somariam o dobro
+        // do teto.
         Err((408, e)) => {
             eprintln!("[gemini] estourou {}s ({e}); segunda tentativa", REWRITE_TIMEOUT.as_secs());
             call_gemini(escolhido, &key, &prompt).map_err(|(_, e2)| e2)
@@ -740,6 +741,14 @@ fn overlay_show(app: &AppHandle) -> u64 {
                 overlay_log(&format!("set_position falhou: {e}"));
             }
         }
+        // A alternância é o que reergue a janela: o tao só chama SetWindowPos
+        // quando a flag ALWAYS_ON_TOP muda de valor (apply_diff), e a janela já
+        // nasce alwaysOnTop pelo tauri.conf.json — então `set_always_on_top(true)`
+        // sozinho nunca fez nada. Sem reerguer, o overlay fica no fundo da faixa
+        // topmost e qualquer outra janela always-on-top criada depois (outro app
+        // de ditado, um HUD) o cobre para sempre: ele pinta a onda normalmente e
+        // o usuário não vê nada. Medido com PrintWindow durante um ditado real.
+        let _ = o.set_always_on_top(false);
         let _ = o.set_always_on_top(true);
         let _ = app.emit_to("overlay", "overlay_show", style);
     } else {
