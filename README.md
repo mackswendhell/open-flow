@@ -25,11 +25,19 @@ informado de que o imóvel pertence ao genitor da parte..."*.
 Não precisa saber programar. Você vai precisar de duas chaves gratuitas (5 minutos, sem cartão
 de crédito) e do instalador.
 
+<!-- ATENÇÃO — NÃO TROCAR OS DOIS LINKS ABAIXO POR /releases/latest NEM POR UMA TAG ESPECÍFICA.
+     /releases/latest é UMA release só, a do último build feito: depois de um build Windows ela
+     não tem .dmg, depois de um build Mac não tem .exe. Foi assim que o link do Mac passou a
+     levar ao .exe e cada máquina "consertou" apontando para a sua própria tag, quebrando o
+     outro lado. Não existe URL do GitHub que resolva para "a release mais recente que tem
+     .dmg" — a lista completa é o único link que nunca mente. Só volte a usar /latest se toda
+     release passar a sair com os dois instaladores juntos. -->
+
 **1. Baixe e instale**
 
 *Windows:*
 
-- Vá em [Releases](../../releases/latest) e baixe o `OpenFlow_x.y.z_x64-setup.exe` mais recente
+- Vá em [Releases](../../releases) e baixe o `OpenFlow_x.y.z_x64-setup.exe` mais recente da lista
 - Execute. O Windows SmartScreen vai avisar que o app não é reconhecido (ele não tem assinatura
   digital paga): clique em **"Mais informações" → "Executar assim mesmo"**. O código-fonte
   completo está neste repositório para quem quiser auditar.
@@ -37,9 +45,9 @@ de crédito) e do instalador.
 
 *macOS (Apple Silicon):*
 
-- Vá em [Releases](../../releases/latest) e baixe o `OpenFlow_x.y.z_aarch64.dmg` mais recente
-  (as v0.1.8 e v0.1.9 corrigem bugs só do Windows e não têm build do Mac; da v0.1.10 em diante
-  o DMG voltou)
+- Vá em [Releases](../../releases) e baixe o `OpenFlow_x.y.z_aarch64.dmg` mais recente da lista
+  — nem toda release traz os dois sistemas (o build de cada um sai na máquina dele), então a
+  release mais nova pode ter só o `.exe`. Desça até a primeira que tenha `.dmg`.
 - Abra o DMG e arraste o Open Flow para **Aplicativos**
 - Na primeira abertura, o Gatekeeper vai bloquear (app sem assinatura paga da Apple): vá em
   **Ajustes → Privacidade e Segurança** e clique em **"Abrir Assim Mesmo"**
