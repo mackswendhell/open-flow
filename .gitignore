@@ -12,8 +12,10 @@ spike/
 *.log
 *.bak
 
-# instruções locais do Claude (contém caminhos e ambiente da máquina)
-CLAUDE.md
+# instruções locais do Claude (contém caminhos e ambiente da máquina).
+# O CLAUDE.md é versionado de propósito: é por ele que o agente da outra máquina
+# aprende as regras do projeto. Só o .local.md fica de fora.
+CLAUDE.local.md
 .claude/
 
 # resultados do benchmark de reescrita (bench/ e ferramenta, out/ e descartavel)
