@@ -12,6 +12,7 @@ use tauri::menu::{CheckMenuItem, Menu, MenuItem, Submenu};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Emitter, Manager, PhysicalPosition};
 
+mod insertion_queue;
 mod platform;
 
 const RULES: &str = "Você é um editor de ditado. Receberá a transcrição literal de uma fala em pt-BR.\n\
@@ -141,7 +142,6 @@ struct Shared {
     groups: Mutex<Vec<Vec<u32>>>,
     cancel: Mutex<Option<u32>>,
     sidecar: Mutex<Option<std::process::Child>>,
-    insert_lock: Mutex<()>,
     /// último texto inserido: a colagem pode falhar sem erro (janela sem foco,
     /// campo não editável) e o clipboard volta ao valor antigo 300ms depois —
     /// sem esta cópia o ditado some sem deixar rastro
@@ -827,6 +827,28 @@ enum Cmd {
 
 fn spawn_pipeline(shared: Arc<Shared>, app: AppHandle) -> Sender<Cmd> {
     let (tx, rx) = channel::<Cmd>();
+    let (insert_tx, insert_rx) = channel();
+    let shared_insert = shared.clone();
+    let app_insert = app.clone();
+    std::thread::spawn(move || {
+        insertion_queue::consume_in_order(insert_rx, |gen, result| {
+            let result = result
+                .map_err(|_| "Processamento do ditado interrompido".to_string())
+                .and_then(|result: Result<String, String>| result)
+                .and_then(|text| {
+                    // Preservar a recuperação pela bandeja mesmo se a colagem falhar.
+                    *shared_insert.last_text.lock().unwrap() = text.clone();
+                    insert_text(&text)
+                });
+            match result {
+                Ok(()) => overlay_hide(&app_insert, gen),
+                Err(e) => {
+                    eprintln!("[pipeline] erro: {e}");
+                    overlay_fail(&app_insert, gen, &e);
+                }
+            }
+        });
+    });
     std::thread::spawn(move || {
         let mut rec = Recorder::new();
         let mut gen = 0u64;
@@ -876,8 +898,13 @@ fn spawn_pipeline(shared: Arc<Shared>, app: AppHandle) -> Sender<Cmd> {
                     // próximo Start é imediato (overlay e gravação sem atraso de fila)
                     let s = shared.settings.lock().unwrap().clone();
                     let shared_w = shared.clone();
-                    let app_w = app.clone();
-                    let gen_w = gen;
+                    // Reservar a posição na thread de captura, antes de processar:
+                    // ordem de conclusão das APIs nunca decide a ordem da colagem.
+                    let (result_tx, result_rx) = channel();
+                    if insert_tx.send((gen, result_rx)).is_err() {
+                        overlay_fail(&app, gen, "Fila de inserção indisponível");
+                        continue;
+                    }
                     std::thread::spawn(move || {
                         let t0 = Instant::now();
                         let result = run_stt(wav_bytes(&samples, rate), &shared_w, &s)
@@ -910,17 +937,9 @@ fn spawn_pipeline(shared: Arc<Shared>, app: AppHandle) -> Sender<Cmd> {
                                         total_secs: total,
                                     });
                                 }
-                                *shared_w.last_text.lock().unwrap() = final_text.clone();
-                                let _serial = shared_w.insert_lock.lock().unwrap();
-                                insert_text(&final_text)
+                                Ok(final_text)
                             });
-                        match result {
-                            Ok(()) => overlay_hide(&app_w, gen_w),
-                            Err(e) => {
-                                eprintln!("[pipeline] erro: {e}");
-                                overlay_fail(&app_w, gen_w, &e);
-                            }
-                        }
+                        let _ = result_tx.send(result);
                     });
                 }
                 Err(_) => break,
@@ -1273,7 +1292,6 @@ mod tests {
             cancel: Mutex::new(parse_cancel_key(cancel)),
             sidecar: Mutex::new(None),
             settings: Mutex::new(s),
-            insert_lock: Mutex::new(()),
             last_text: Mutex::new(String::new()),
             overlay_gen: AtomicU64::new(0),
         });
@@ -1370,7 +1388,6 @@ pub fn run() {
         cancel: Mutex::new(parse_cancel_key(&settings.cancel_key)),
         sidecar: Mutex::new(if start_local { platform::spawn_sidecar(&settings) } else { None }),
         settings: Mutex::new(settings.clone()),
-        insert_lock: Mutex::new(()),
         last_text: Mutex::new(String::new()),
         overlay_gen: AtomicU64::new(0),
     });
