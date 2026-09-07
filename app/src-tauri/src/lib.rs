@@ -575,15 +575,15 @@ fn modelo_efetivo(configurado: &str) -> &str {
     }
 }
 
-/// Teto por tentativa. O free tier trava requisições isoladas sem relação com o
-/// tamanho da entrada — medido em ditados reais do history: 18,1s para 43
-/// caracteres no mesmo lote em que 1729 caracteres saíram em 1,8s. E a travada
-/// não gruda: refeita na hora, a chamada volta ao tempo normal (24/24 num teste
-/// que cortava tudo acima de 2s). Por isso cortar cedo ganha do teto largo —
-/// medido, o corte em 2s deu máximo de 4,1s contra 10,0s do corte em 8s.
-/// 4s é o meio: acima do p95 real (~3,3s), então quase nenhuma chamada boa
-/// morre, e ainda mata o estol antes de o ditado virar prejuízo.
-const REWRITE_TIMEOUT: Duration = Duration::from_secs(4);
+/// Teto por tentativa, e só uma tentativa. O corte em 4s + retry valia enquanto
+/// o p95 era ~3,3s: quase toda chamada acima disso era estol, e estol não gruda.
+/// Remedido em 2026-09-06 (bench_rewrite, ditados reais do history): mediana
+/// 1,35s mas p90 5,85s — chamada SAUDÁVEL passa de 4s hoje. Com o teto antigo
+/// ela morria duas vezes e o ditado custava 8s para sair sem reescrita nenhuma
+/// (78 casos no history). O teto de 8s guarda o mesmo pior caso e devolve essas
+/// chamadas reescritas em ~6s. O estol de verdade (25-30s) morre aqui igual.
+/// Refazer a medição com bench/bench_rewrite.py antes de mexer no número.
+const REWRITE_TIMEOUT: Duration = Duration::from_secs(8);
 
 /// Err traz o status HTTP (0 = falha de rede, 408 = estourou o teto) para separar
 /// "esse modelo não serve para esta chave" de "a internet caiu".
@@ -631,15 +631,6 @@ fn rewrite(raw: &str, s: &Settings) -> Result<String, String> {
     let escolhido = modelo_efetivo(&s.gemini_model);
     match call_gemini(escolhido, &key, &prompt) {
         Ok(t) => Ok(t),
-        // Travada isolada do free tier: a segunda tentativa pega outra fila e
-        // costuma responder no tempo normal. Só cabe porque o teto caiu para
-        // REWRITE_TIMEOUT — com os 30s antigos a segunda chamada chegaria depois
-        // de o usuário já ter desistido. Uma tentativa só: duas somariam o dobro
-        // do teto.
-        Err((408, e)) => {
-            eprintln!("[gemini] estourou {}s ({e}); segunda tentativa", REWRITE_TIMEOUT.as_secs());
-            call_gemini(escolhido, &key, &prompt).map_err(|(_, e2)| e2)
-        }
         // Modelo fora do ar (404/503) ou cota do minuto estourada (429): o
         // fallback é outro modelo, logo outro balde de cota, então responde na
         // hora. Erro de rede não entra: erraria de novo.
