@@ -24,7 +24,7 @@ sai na máquina dele. Isso é a origem da maior parte da confusão histórica do
 - **Ao fechar uma release, atualizar a seção "Estado atual" abaixo.** É por ela que o agente da
   outra máquina descobre o que ficou pendente do lado dele.
 
-## Estado atual (2026-08-21)
+## Estado atual (2026-09-06)
 
 - **Versão**: v0.1.15 no Windows, v0.1.14 no macOS. As correções da v0.1.15 são de `lib.rs`,
   comuns aos dois SOs — **buildar no Mac e anexar o DMG à tag v0.1.15**, que hoje só tem os
@@ -34,6 +34,22 @@ sai na máquina dele. Isso é a origem da maior parte da confusão histórica do
   `alwaysOnTop`; a correção é alternar `false`/`true`. (2) O fix do fallback do Gemini vindo do
   Mac (9b9ce95): só 404 rebaixa a sessão, reserva virou `gemini-flash-lite-latest`, teto por
   chamada de 30s para 4s com uma segunda tentativa.
+- **Teto da reescrita voltou para 8s, sem retry (41839b1) — só no Mac por enquanto.** É
+  mudança de `lib.rs`, vale nos dois SOs, mas o build saiu só aqui e não virou release: a tag
+  v0.1.15 publicada NÃO a contém, e o Windows segue no teto de 4s. O Macks avalia que lá está
+  rápido o bastante; se algum dia não estiver, o remédio é este commit. Motivo da mudança: os
+  4s de 9b9ce95 foram calibrados com p95 de ~3,3s, e a remedição de 2026-09-06 deu p90 de
+  7,30s — chamada saudável passou a morrer no teto, tentar de novo, morrer outra vez, e o
+  ditado custava 8s para sair **sem reescrita** (78 casos no `history.jsonl`). Se a latência
+  voltar a incomodar, remedir antes de mexer no número: `bench/bench_rewrite.py` com
+  `--retry-apos` compara as estratégias, e o `history.jsonl` conta quantos ditados saíram com
+  `raw == final`, que é o custo escondido de um teto curto.
+- **Latência do Gemini é do modelo, não do SO.** Medido em 2026-09-06 no Mac, o
+  `gemini-3.5-flash-lite` deu mediana 1,47s mas p90 7,30s e 18% de falha; o reserva
+  `gemini-flash-lite-latest` tem 1,39s de mediana registrada. Como o modelo vive no
+  `settings.json` de cada máquina (ver o item abaixo), as duas podem estar em modelos
+  diferentes — daí uma parecer rápida e a outra não, com o mesmo código. Conferir a chave
+  `gemini_model` antes de culpar a plataforma.
 - **Pendente de confirmação em uso**: a assinatura do Whisper aparecia em ~3% dos ditados, então
   a prova de que o `strip_credit` resolveu vem com volume, não com sessão de teste.
 - **Modelo do Gemini vive no `settings.json`, não no default.** Trocar o default só afeta
@@ -79,6 +95,16 @@ passar a sair com os dois instaladores juntos.
   `stt_provider != "groq" || !groq_ready()` — ele também sobe se a Groq estiver selecionada mas
   sem chave válida. Com a Groq funcionando, o modelo nem carrega na GPU; não estranhar a
   ausência do processo Python.
+- **Rebuild por cima do app instalado no macOS derruba as permissões, e os Ajustes mentem.**
+  O bundle é assinado ad-hoc, então o TCC amarra Acessibilidade e Monitoramento de Entrada ao
+  hash do executável: todo `tauri build` copiado para `/Applications/OpenFlow.app` invalida as
+  duas, enquanto a lista dos Ajustes continua mostrando o OpenFlow marcado. O sintoma é o
+  atalho não abrir o overlay (o `CGEventTap::new` falha) e a colagem morrer com "the
+  application does not have the permission to simulate input" (o enigo). Desmarcar e remarcar o
+  toggle não resolve — some com a entrada velha e recomece:
+  `tccutil reset ListenEvent com.macks-wendhell.openflow` e o mesmo para `Accessibility`,
+  autorizar de novo e **relançar o app** (o TCC só é lido no lançamento). Em 2026-09-06 isso
+  passou meia sessão parecendo regressão do último commit. Acaba quando houver assinatura paga.
 - **Testar atalho global é sempre físico.** Injeção de tecla por API é filtrada pelo sistema e
   dá falso negativo.
 - **Chaves de API nunca entram em commit, issue ou log.** Elas vivem no `settings.json` do
